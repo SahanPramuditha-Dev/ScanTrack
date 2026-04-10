@@ -551,7 +551,43 @@ export function AdminPage({ user }) {
     }
   }, [section, attendanceRangeStart, attendanceRangeEnd])
 
-  // Update token validation warnings
+  // Token validation moved UP (hoisting fix)
+  const tokenValidations = useMemo(() => {
+    const warnings = []
+    const today = new Date()
+    const daysSinceLastRotation = Math.floor((today - new Date(tokenHistory[0]?.issuedAt || today)) / (1000 * 60 * 60 * 24))
+    
+    if (daysSinceLastRotation > 30) {
+      warnings.push({
+        type: 'rotation',
+        severity: 'warning',
+        message: `Token hasn't been rotated in ${daysSinceLastRotation} days. Consider rotating for security.`,
+      })
+    }
+
+    const activeTokens = tokenHistory.filter((t) => t.active)
+    if (activeTokens.length > 1) {
+      warnings.push({
+        type: 'multi-active',
+        severity: 'danger',
+        message: `${activeTokens.length} tokens are active. Only 1 should be active at a time.`,
+      })
+    }
+
+    const lowScanTokens = tokenHistory
+      .filter((t) => t.active && (t.scansCount || 0) < 2)
+      .slice(0, 3)
+    if (lowScanTokens.length > 0) {
+      warnings.push({
+        type: 'low-scans',
+        severity: 'info',
+        message: `${lowScanTokens.length} active token(s) have very few scans. Check if display is connected.`,
+      })
+    }
+
+    return warnings
+  }, [tokenHistory])
+
   useEffect(() => {
     setTokenValidationWarnings(tokenValidations)
   }, [tokenValidations])
