@@ -1678,19 +1678,36 @@ export async function getEmployees() {
   return readJson(DEMO_USERS_KEY, []).filter((employee) => employee.active !== false)
 }
 
-export async function getEmployeeProfile(userId) {
-  if (!userId) return null
+export async function getEmployeeProfile(userOrId) {
+  if (!userOrId) return null
+  const lookupId = typeof userOrId === 'object' ? String(userOrId.uid || userOrId.id || userOrId.userId || '').trim() : String(userOrId).trim()
+  const lookupEmail = typeof userOrId === 'object' ? String(userOrId.email || '').trim().toLowerCase() : ''
+
   if (isFirebaseConfigured) {
     try {
-      const docRef = doc(db, 'employees', String(userId))
-      const docSnap = await getDoc(docRef)
-      if (docSnap.exists()) {
-        return { id: docSnap.id, ...docSnap.data() }
+      if (lookupId) {
+        const docRef = doc(db, 'employees', lookupId)
+        const docSnap = await getDoc(docRef)
+        if (docSnap.exists()) {
+          return { id: docSnap.id, ...docSnap.data() }
+        }
+      }
+      if (lookupEmail) {
+        const emailQuery = query(
+          collection(db, 'employees'),
+          where('email', '==', lookupEmail),
+          limit(1),
+        )
+        const emailSnap = await getDocs(emailQuery)
+        if (!emailSnap.empty) {
+          const employee = emailSnap.docs[0]
+          return { id: employee.id, ...employee.data() }
+        }
       }
       return null
     } catch (error) {
       if (error.code === 'permission-denied') {
-        throw new Error('Insufficient permissions - employee profile not found. Ask admin to create your account with the exact Google email used for sign-in.');
+        throw new Error('Insufficient permissions - employee profile not found. Ask admin to create your account with the exact Google email used for sign-in.')
       }
       console.warn('Error getting employee profile:', error)
       return null
@@ -1698,7 +1715,10 @@ export async function getEmployeeProfile(userId) {
   }
 
   const employees = readJson(DEMO_USERS_KEY, [])
-  return employees.find(emp => emp.id === userId || emp.uid === userId || emp.userId === userId) || null
+  return employees.find((emp) =>
+    (lookupId && (String(emp.id) === lookupId || String(emp.uid) === lookupId || String(emp.userId) === lookupId)) ||
+    (lookupEmail && String(emp.email || '').toLowerCase() === lookupEmail)
+  ) || null
 }
 
 function normalizeRoleConfig(role) {

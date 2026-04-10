@@ -192,12 +192,10 @@ export function EmployeePage() {
   const gpsLabel = gps ? `${gps.lat.toFixed(5)},${gps.lng.toFixed(5)}` : ''
   const gpsDotClass = gpsState === 'ready' ? 'gps-ok-dot' : gpsState === 'checking' ? 'gps-pending-dot' : 'gps-miss-dot'
 
-  const getInviteEmail = () => {
+  const inviteEmail = (() => {
     const params = new URLSearchParams(window.location.search)
     return params.get('i')?.trim().toLowerCase() || ''
-  }
-
-  const inviteEmail = getInviteEmail()
+  })()
 
   const handleDemoLogin = async (event) => {
     event.preventDefault()
