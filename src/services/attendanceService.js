@@ -442,6 +442,10 @@ function safeName(email, displayName) {
   return email.split('@')[0]
 }
 
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase()
+}
+
 function setAuthError(message) {
   sessionStorage.setItem(AUTH_ERROR_KEY, message)
 }
@@ -462,6 +466,7 @@ async function enrichFirebaseUser(firebaseUser) {
 
   const tokenResult = await firebaseUser.getIdTokenResult().catch(() => null)
   const roleFromClaim = tokenResult?.claims?.role
+  const normalizedEmail = normalizeEmail(firebaseUser.email)
 
   const profileRef = doc(db, 'employees', firebaseUser.uid)
   let profile = null
@@ -472,10 +477,10 @@ async function enrichFirebaseUser(firebaseUser) {
     profile = profileSnap.data()
   }
 
-  if (firebaseUser.email) {
+  if (normalizedEmail) {
     const inviteQuery = query(
       collection(db, 'employees'),
-      where('email', '==', firebaseUser.email),
+      where('email', '==', normalizedEmail),
       limit(10),
     )
     const inviteSnap = await getDocs(inviteQuery).catch(() => null)
@@ -486,38 +491,32 @@ async function enrichFirebaseUser(firebaseUser) {
       || null
   }
 
+  // Employees are often pre-created by admin under a generated document id, not their Firebase UID.
+  // Use that invited record directly instead of requiring a UID-based write during first login.
   if (!profile && invited) {
-    await setDoc(
-      profileRef,
-      {
-        name: invited.name || safeName(firebaseUser.email, firebaseUser.displayName),
-        email: firebaseUser.email || '',
-        role: invited.role || 'employee',
-        active: invited.active !== false,
-        updatedAt: serverTimestamp(),
-        createdAt: invited.createdAt || serverTimestamp(),
-      },
-      { merge: true },
-    ).catch(() => null)
-
-    const claimed = await getDoc(profileRef).catch(() => null)
-    if (claimed?.exists()) {
-      profile = claimed.data()
-    }
+    profile = invited
   }
 
-  if (profile && invited && firebaseUser.email) {
+  if (profile && invited && normalizedEmail) {
     const needsRoleSync = invited.role === 'admin' && profile.role !== 'admin'
     const needsActiveSync = invited.active === false && profile.active !== false
     const needsNameSync = !profile.name && invited.name
-    if (needsRoleSync || needsActiveSync || needsNameSync) {
+    const needsEmailSync = normalizeEmail(profile.email) !== normalizedEmail
+    const needsPayrollRoleSync = !profile.roleName && invited.roleName
+    const needsRateSync = profile.dailyRate === undefined && invited.dailyRate !== undefined
+    const needsHolidaySync = profile.allowedHolidays === undefined && invited.allowedHolidays !== undefined
+    const profileDocMatchesUid = profileRef.id === (profile.id || '')
+    if (profileDocMatchesUid && (needsRoleSync || needsActiveSync || needsNameSync || needsEmailSync || needsPayrollRoleSync || needsRateSync || needsHolidaySync)) {
       await setDoc(
         profileRef,
         {
           name: profile.name || invited.name || safeName(firebaseUser.email, firebaseUser.displayName),
-          email: firebaseUser.email || '',
+          email: normalizedEmail,
           role: needsRoleSync ? 'admin' : (profile.role || invited.role || 'employee'),
           active: needsActiveSync ? false : profile.active !== false,
+          roleName: profile.roleName || invited.roleName || '',
+          dailyRate: Number(profile.dailyRate ?? invited.dailyRate ?? 0) || 0,
+          allowedHolidays: Number(profile.allowedHolidays ?? invited.allowedHolidays ?? 0) || 0,
           updatedAt: serverTimestamp(),
           createdAt: profile.createdAt || invited.createdAt || serverTimestamp(),
         },
@@ -545,7 +544,7 @@ async function enrichFirebaseUser(firebaseUser) {
 
   return {
     uid: firebaseUser.uid,
-    email: firebaseUser.email,
+    email: normalizedEmail || firebaseUser.email,
     displayName: firebaseUser.displayName,
     name: profile?.name || safeName(firebaseUser.email, firebaseUser.displayName),
     role: roleFromClaim || profile?.role || 'employee',
@@ -613,9 +612,9 @@ export function subscribeAuth(callback) {
           const profile = profileSnap.exists() ? profileSnap.data() : null
           callback({
             uid: firebaseUser.uid,
-            email: firebaseUser.email,
+            email: normalizeEmail(firebaseUser.email) || firebaseUser.email,
             displayName: firebaseUser.displayName,
-            name: profile?.name || safeName(firebaseUser.email, firebaseUser.displayName),
+            name: profile?.name || enriched?.name || safeName(firebaseUser.email, firebaseUser.displayName),
             role: profile?.role || enriched?.role || 'employee',
           })
         },
@@ -1834,6 +1833,7 @@ export async function createEmployeeByAdmin({
   name,
   email,
   role = 'employee',
+  roleName = '',
   active = true,
   dailyRate = 0,
   allowedHolidays,
@@ -1848,6 +1848,7 @@ export async function createEmployeeByAdmin({
     const fallbackHolidays = Number(rules?.payrollRules?.defaultAllowedHolidays ?? DEFAULT_SETTINGS.payrollRules.defaultAllowedHolidays) || 0
     const normalizedEmail = String(email || '').trim().toLowerCase()
     const cleanName = String(name || '').trim()
+    const cleanRoleName = String(roleName || '').trim()
 
     if (!normalizedEmail || !cleanName) {
       throw new Error('Name and email are required.')
@@ -1868,6 +1869,7 @@ export async function createEmployeeByAdmin({
       name: cleanName,
       email: normalizedEmail,
       role,
+      roleName: cleanRoleName,
       active,
       dailyRate: Number(dailyRate) || 0,
       allowedHolidays: Number(allowedHolidays ?? fallbackHolidays) || 0,
@@ -1883,6 +1885,7 @@ export async function createEmployeeByAdmin({
   const fallbackHolidays = Number(rules?.payrollRules?.defaultAllowedHolidays ?? DEFAULT_SETTINGS.payrollRules.defaultAllowedHolidays) || 0
   const normalizedEmail = String(email || '').trim().toLowerCase()
   const cleanName = String(name || '').trim()
+  const cleanRoleName = String(roleName || '').trim()
   if (!normalizedEmail || !cleanName) {
     throw new Error('Name and email are required.')
   }
@@ -1894,6 +1897,7 @@ export async function createEmployeeByAdmin({
     email: normalizedEmail,
     name: cleanName,
     role,
+    roleName: cleanRoleName,
     active,
     dailyRate: Number(dailyRate) || 0,
     allowedHolidays: Number(allowedHolidays ?? fallbackHolidays) || 0,
@@ -1906,6 +1910,7 @@ export async function updateEmployeeByAdmin({
   name,
   email,
   role = 'employee',
+  roleName = '',
   active = true,
   dailyRate = 0,
   allowedHolidays,
@@ -1917,6 +1922,7 @@ export async function updateEmployeeByAdmin({
 
   const normalizedEmail = String(email || '').trim().toLowerCase()
   const cleanName = String(name || '').trim()
+  const cleanRoleName = String(roleName || '').trim()
 
   if (!normalizedEmail || !cleanName) {
     throw new Error('Name and email are required.')
@@ -1931,6 +1937,7 @@ export async function updateEmployeeByAdmin({
         name: cleanName,
         email: normalizedEmail,
         role,
+        roleName: cleanRoleName,
         active,
         dailyRate: Number(dailyRate) || 0,
         allowedHolidays: Number(allowedHolidays ?? fallbackHolidays) || 0,
@@ -1955,6 +1962,7 @@ export async function updateEmployeeByAdmin({
           name: cleanName,
           email: normalizedEmail,
           role,
+          roleName: cleanRoleName,
           active,
           dailyRate: Number(dailyRate) || 0,
           allowedHolidays: Number(allowedHolidays ?? employee.allowedHolidays ?? DEFAULT_SETTINGS.payrollRules.defaultAllowedHolidays) || 0,

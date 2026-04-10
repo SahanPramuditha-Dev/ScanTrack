@@ -2378,9 +2378,18 @@ button.close {
 
 .employee-form-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
   align-items: end;
+}
+
+.employee-form-grid label {
+  min-width: 0;
+}
+
+.employee-form-grid input,
+.employee-form-grid select {
+  width: 100%;
 }
 
 .employee-form-actions {
@@ -2389,6 +2398,7 @@ button.close {
 
 .employee-form-actions button {
   width: 100%;
+  min-height: 44px;
 }
 
 .emp-meta {
@@ -2406,6 +2416,7 @@ button.close {
 .emp-card {
   display: grid;
   gap: 10px;
+  align-content: start;
 }
 
 .emp-card.inactive {
@@ -2460,6 +2471,7 @@ button.close {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 4px;
 }
 
 .emp-card-actions button {

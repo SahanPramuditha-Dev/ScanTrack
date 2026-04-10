@@ -272,7 +272,6 @@ export function AdminPage({ user }) {
   const [attendanceRangeEnd, setAttendanceRangeEnd] = useState(getTodayKey())
   const [attendanceRangeData, setAttendanceRangeData] = useState([])
   const [attendanceRangeLoading, setAttendanceRangeLoading] = useState(false)
-  const [tokenValidationWarnings, setTokenValidationWarnings] = useState([])
 
   const loadData = useCallback(async () => {
     if (!user || !isAdminUser(user)) return
@@ -443,7 +442,7 @@ export function AdminPage({ user }) {
   }, [salaryMonth, salarySelectedUserId, salaryView, section])
 
   useEffect(() => {
-    if (section !== 'roles') return
+    if (section !== 'roles' && section !== 'employees') return
     loadRoles()
   }, [loadRoles, section])
 
@@ -871,6 +870,7 @@ await createEmployeeByAdmin({
       setNewEmpName('')
       setNewEmpEmail('')
       setNewEmpRole('employee')
+      setNewEmpRoleName('')
       setNewEmpDailyRate('')
       setNewEmpAllowedHolidays('')
       setEditingEmployeeId('')
@@ -2287,9 +2287,9 @@ await createEmployeeByAdmin({
                   <label>Payroll Role (optional)
                     <select value={newEmpRoleName} onChange={(e) => setNewEmpRoleName(e.target.value)}>
                       <option value="">No payroll role</option>
-                        {roles.map((role) => (
-                          <option key={role.id || role.roleName} value={role.roleName}>{role.roleName} ({role.payType})</option>
-                        ))}
+                      {roles.map((role) => (
+                        <option key={role.id || role.roleName} value={role.roleName}>{role.roleName} ({role.payType})</option>
+                      ))}
                     </select>
                   </label>
                   <label>Daily Rate
@@ -2321,18 +2321,23 @@ await createEmployeeByAdmin({
             </section>
 
             <section className="employee-grid">
-                {directoryRows.map((item) => (
-                  <article key={item.uid || item.email || item.name} className="card emp-card">
-                  <div className="emp-avatar">{(item.name || 'E').slice(0, 2).toUpperCase()}</div>
-                  <h3>{item.name}</h3>
-                  <p className="muted">{item.email}</p>
-                  <div className="emp-meta">
+              {directoryRows.map((item) => (
+                <article key={item.uid || item.email || item.name} className="card emp-card">
+                  <div className="emp-card-head">
+                    <div className={`emp-avatar ${item.active === false ? 'inactive' : ''}`}>{(item.name || 'E').slice(0, 2).toUpperCase()}</div>
+                    <div className="emp-card-title">
+                      <h3>{item.name}</h3>
+                      <p className="muted">{item.email}</p>
+                    </div>
                     <span className={`pill ${item.late ? 'danger' : 'neutral'}`}>{item.status}</span>
-                    <span className="muted">{item.checkInAt ? `In ${formatClock(item.checkInAt)}` : 'No check-in'}</span>
-                    <span className="muted">{item.checkOutAt ? `Out ${formatClock(item.checkOutAt)}` : ''}</span>
+                  </div>
+                  <div className="emp-meta">
+                    <span className="muted">{item.roleName ? `Payroll role: ${item.roleName}` : 'Payroll role: None'}</span>
+                    <span className="muted">{item.checkInAt ? `In ${formatClock(item.checkInAt)}` : 'No check-in yet'}</span>
+                    <span className="muted">{item.checkOutAt ? `Out ${formatClock(item.checkOutAt)}` : 'No check-out yet'}</span>
                     <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} • Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
                   </div>
-<div className="row gap" style={{ marginTop: 8 }}>
+                  <div className="emp-card-actions">
                     <button type="button" className="ghost" onClick={() => openEmployeeDetail(item)}>View detail</button>
                     <button type="button" className="ghost" onClick={() => startEditEmployee(item)}>Edit</button>
                     <button 
@@ -3115,11 +3120,11 @@ await createEmployeeByAdmin({
                 </section>
 
                 {/* Validation Alerts */}
-                {tokenValidationWarnings.length > 0 && (
+                {tokenValidations.length > 0 && (
                   <section className="card">
                     <h3>⚠️ System Alerts</h3>
                     <div className="validation-alerts">
-                      {tokenValidationWarnings.map((warning, idx) => (
+                      {tokenValidations.map((warning, idx) => (
                         <article key={idx} className={`validation-alert ${warning.severity}`}>
                           <div className="validation-alert-content">
                             <strong>{warning.type === 'rotation' ? 'Security' : warning.type === 'multi-active' ? 'Configuration' : 'Connectivity'}</strong>
@@ -4040,6 +4045,7 @@ await createEmployeeByAdmin({
                         <h3>Profile</h3>
                         <div className="grid two compact">
                           <p><strong>Role:</strong> {employeeDetail.role || 'employee'}</p>
+                          <p><strong>Payroll Role:</strong> {employeeDetail.roleName || 'None'}</p>
                           <p><strong>Daily Rate:</strong> {Number(employeeDetail.dailyRate || 0).toLocaleString()}</p>
                           <p><strong>Paid Holidays:</strong> {Number(employeeDetail.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</p>
                           <p><strong>Attendance Days:</strong> {employeeDetailRows.length}</p>
