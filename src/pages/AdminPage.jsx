@@ -750,6 +750,12 @@ export function AdminPage({ user }) {
     return sorted
   }, [directory, employeeRoleFilter, employeeSearch, employeeSort, employeeStatusFilter, showInactiveEmployees])
 
+  const pendingApprovalRows = useMemo(() => {
+    return directory
+      .filter((entry) => (entry.role || 'employee') !== 'admin' && entry.active === false)
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))
+  }, [directory])
+
   const directorySummary = useMemo(() => summarizeAttendance(directory), [directory])
 
   const filteredSalaryRows = useMemo(() => {
@@ -920,6 +926,34 @@ await createEmployeeByAdmin({
       await loadData()
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  const approveEmployee = async (employee) => {
+    const id = employee.uid || employee.id
+    if (!id) return
+
+    setError('')
+    setMessage('')
+    setSavingEmployee(true)
+    try {
+      await updateEmployeeByAdmin({
+        id,
+        name: employee.name || '',
+        email: employee.email || '',
+        role: employee.role || 'employee',
+        roleName: employee.roleName || '',
+        dailyRate: Number(employee.dailyRate || 0),
+        allowedHolidays: Number(employee.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 0),
+        active: true,
+        updatedBy: user.uid || user.id,
+      })
+      setMessage(`${employee.name || employee.email || 'Employee'} approved.`)
+      await loadData()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSavingEmployee(false)
     }
   }
 
@@ -2320,6 +2354,41 @@ await createEmployeeByAdmin({
               </form>
             </section>
 
+            {pendingApprovalRows.length > 0 && (
+              <section className="card">
+                <div className="row between wrap" style={{ marginBottom: 10 }}>
+                  <div>
+                    <h3 style={{ marginBottom: 4 }}>Pending Approvals</h3>
+                    <p className="muted" style={{ margin: 0 }}>New sign-ins waiting for admin approval.</p>
+                  </div>
+                  <span className="pill danger">{pendingApprovalRows.length} pending</span>
+                </div>
+                <section className="employee-grid">
+                  {pendingApprovalRows.map((item) => (
+                    <article key={`pending-${item.uid || item.id || item.email}`} className="card emp-card inactive">
+                      <div className="emp-card-head">
+                        <div className="emp-avatar inactive">{(item.name || 'E').slice(0, 2).toUpperCase()}</div>
+                        <div className="emp-card-title">
+                          <h3>{item.name || 'Pending employee'}</h3>
+                          <p className="muted">{item.email}</p>
+                        </div>
+                        <span className="pill danger">Pending</span>
+                      </div>
+                      <div className="emp-meta">
+                        <span className="muted">{item.roleName ? `Payroll role: ${item.roleName}` : 'Payroll role: None'}</span>
+                        <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} • Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
+                      </div>
+                      <div className="emp-card-actions">
+                        <button type="button" onClick={() => approveEmployee(item)} disabled={savingEmployee}>Approve</button>
+                        <button type="button" className="ghost" onClick={() => startEditEmployee(item)}>Edit</button>
+                        <button type="button" className="ghost danger" onClick={() => removeEmployee(item)}>Remove</button>
+                      </div>
+                    </article>
+                  ))}
+                </section>
+              </section>
+            )}
+
             <section className="employee-grid">
               {directoryRows.map((item) => (
                 <article key={item.uid || item.email || item.name} className="card emp-card">
@@ -2329,7 +2398,7 @@ await createEmployeeByAdmin({
                       <h3>{item.name}</h3>
                       <p className="muted">{item.email}</p>
                     </div>
-                    <span className={`pill ${item.late ? 'danger' : 'neutral'}`}>{item.status}</span>
+                    <span className={`pill ${item.active === false ? 'danger' : item.late ? 'danger' : 'neutral'}`}>{item.active === false ? 'Pending' : item.status}</span>
                   </div>
                   <div className="emp-meta">
                     <span className="muted">{item.roleName ? `Payroll role: ${item.roleName}` : 'Payroll role: None'}</span>
@@ -2340,6 +2409,9 @@ await createEmployeeByAdmin({
                   <div className="emp-card-actions">
                     <button type="button" className="ghost" onClick={() => openEmployeeDetail(item)}>View detail</button>
                     <button type="button" className="ghost" onClick={() => startEditEmployee(item)}>Edit</button>
+                    {item.active === false ? (
+                      <button type="button" onClick={() => approveEmployee(item)} disabled={savingEmployee}>Approve</button>
+                    ) : null}
                     <button 
                       type="button" 
                       className="ghost" 
