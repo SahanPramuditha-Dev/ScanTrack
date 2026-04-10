@@ -192,19 +192,27 @@ export function EmployeePage() {
   const gpsLabel = gps ? `${gps.lat.toFixed(5)},${gps.lng.toFixed(5)}` : ''
   const gpsDotClass = gpsState === 'ready' ? 'gps-ok-dot' : gpsState === 'checking' ? 'gps-pending-dot' : 'gps-miss-dot'
 
+  const getInviteEmail = () => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('i')?.trim().toLowerCase() || ''
+  }
+
+  const inviteEmail = getInviteEmail()
+
   const handleDemoLogin = async (event) => {
     event.preventDefault()
     setError('')
     setMessage('')
 
-    if (!email.trim()) {
-      setError('Enter your work email address.')
+    const loginEmail = inviteEmail || email
+    if (!loginEmail.trim()) {
+      setError('Enter your work email address or use invite link.')
       return
     }
 
     setLoading(true)
     try {
-      await demoSignIn(email)
+      await demoSignIn(loginEmail)
       setMessage('Signed in successfully.')
     } catch (err) {
       setError(err.message)

@@ -5,6 +5,7 @@ import { downloadCsv } from '../lib/csv'
 import { formatDateKey, getTodayKey } from '../lib/time'
 import {
   aggregateDailyPayments,
+  bulkDeleteExpiredTokens,
   clearAttendanceForDate,
   clearNotificationsForDate,
   clearNotifications,
@@ -12,9 +13,12 @@ import {
   createEmployeeByAdmin,
   createTvDisplaySession,
   deleteDailyPayment,
+  deleteToken,
   formatAuthName,
   generateSalaryForMonth,
+  getAttendanceByDateRange,
   getTokenHistory,
+  getTokenStats,
   getAttendanceDailyForRange,
   getAdminLogs,
   getAdminSettings,
@@ -31,6 +35,7 @@ import {
   issueTvToken,
   monthKeyFromDateKey,
   removeEmployeeByAdmin,
+  revokeToken,
   saveAdminSettings,
   setShopGps,
   summarizeAttendance,
@@ -258,6 +263,17 @@ export function AdminPage({ user }) {
   const [newEmpAllowedHolidays, setNewEmpAllowedHolidays] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
 
+  // QR codes page state
+  const [tokenSearch, setTokenSearch] = useState('')
+  const [tokenStatusFilter, setTokenStatusFilter] = useState('all')
+  const [tokenStats, setTokenStats] = useState(null)
+  const [tokenStatsLoading, setTokenStatsLoading] = useState(false)
+  const [attendanceRangeStart, setAttendanceRangeStart] = useState(getTodayKey())
+  const [attendanceRangeEnd, setAttendanceRangeEnd] = useState(getTodayKey())
+  const [attendanceRangeData, setAttendanceRangeData] = useState([])
+  const [attendanceRangeLoading, setAttendanceRangeLoading] = useState(false)
+  const [tokenValidationWarnings, setTokenValidationWarnings] = useState([])
+
   const loadData = useCallback(async () => {
     if (!user || !isAdminUser(user)) return
     setLoading(true)
@@ -473,6 +489,124 @@ export function AdminPage({ user }) {
       setDate(latestLogDate)
     }
   }, [logs, date, dateTouched])
+
+  // Load token stats when QR codes section is active
+  useEffect(() => {
+    if (section !== 'qrcodes') return
+
+    let cancelled = false
+    const loadTokenStats = async () => {
+      setTokenStatsLoading(true)
+      try {
+        const start = new Date()
+        start.setDate(start.getDate() - 7)
+        const end = new Date()
+        const stats = await getTokenStats(start.toISOString(), end.toISOString())
+        if (!cancelled) {
+          setTokenStats(stats)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message)
+        }
+      } finally {
+        if (!cancelled) {
+          setTokenStatsLoading(false)
+        }
+      }
+    }
+
+    loadTokenStats()
+    return () => {
+      cancelled = true
+    }
+  }, [section])
+
+  // Load attendance range data for export
+  useEffect(() => {
+    if (section !== 'qrcodes') return
+
+    let cancelled = false
+    const loadRangeData = async () => {
+      setAttendanceRangeLoading(true)
+      try {
+        const data = await getAttendanceByDateRange(attendanceRangeStart, attendanceRangeEnd)
+        if (!cancelled) {
+          setAttendanceRangeData(data)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message)
+        }
+      } finally {
+        if (!cancelled) {
+          setAttendanceRangeLoading(false)
+        }
+      }
+    }
+
+    loadRangeData()
+    return () => {
+      cancelled = true
+    }
+  }, [section, attendanceRangeStart, attendanceRangeEnd])
+
+  // Update token validation warnings
+  useEffect(() => {
+    setTokenValidationWarnings(tokenValidations)
+  }, [tokenValidations])
+
+  // Token filtering and validation
+  const filteredTokens = useMemo(() => {
+    const keyword = tokenSearch.trim().toLowerCase()
+    return tokenHistory
+      .filter((t) => tokenStatusFilter === 'all' || 
+        (tokenStatusFilter === 'active' && t.active) ||
+        (tokenStatusFilter === 'expired' && !t.active))
+      .filter((t) => {
+        if (!keyword) return true
+        return String(t.token || '').includes(keyword) ||
+          String(t.scansCount || 0).includes(keyword) ||
+          String(t.issuedAt || '').includes(keyword)
+      })
+  }, [tokenHistory, tokenSearch, tokenStatusFilter])
+
+  // Token validation alerts
+  const tokenValidations = useMemo(() => {
+    const warnings = []
+    const today = new Date()
+    const daysSinceLastRotation = Math.floor((today - new Date(tokenHistory[0]?.issuedAt || today)) / (1000 * 60 * 60 * 24))
+    
+    if (daysSinceLastRotation > 30) {
+      warnings.push({
+        type: 'rotation',
+        severity: 'warning',
+        message: `Token hasn't been rotated in ${daysSinceLastRotation} days. Consider rotating for security.`,
+      })
+    }
+
+    const activeTokens = tokenHistory.filter((t) => t.active)
+    if (activeTokens.length > 1) {
+      warnings.push({
+        type: 'multi-active',
+        severity: 'danger',
+        message: `${activeTokens.length} tokens are active. Only 1 should be active at a time.`,
+      })
+    }
+
+    const lowScanTokens = tokenHistory
+      .filter((t) => t.active && (t.scansCount || 0) < 2)
+      .slice(0, 3)
+    if (lowScanTokens.length > 0) {
+      warnings.push({
+        type: 'low-scans',
+        severity: 'info',
+        message: `${lowScanTokens.length} active token(s) have very few scans. Check if display is connected.`,
+      })
+    }
+
+    return warnings
+  }, [tokenHistory])
 
   const filteredLogs = useMemo(() => {
     const keyword = search.trim().toLowerCase()
@@ -729,9 +863,9 @@ export function AdminPage({ user }) {
           updatedBy: user.uid || user.id,
         })
       } else {
-        await createEmployeeByAdmin({
+await createEmployeeByAdmin({
           name: newEmpName,
-          email: newEmpEmail,
+          email: newEmpEmail.trim().toLowerCase(),
           role: newEmpRole,
           roleName: newEmpRoleName,
           dailyRate: Number(newEmpDailyRate || 0),
@@ -1039,6 +1173,72 @@ export function AdminPage({ user }) {
     } catch {
       setError('Clipboard copy not available in this browser.')
     }
+  }
+
+  const handleRevokeToken = async (tokenId) => {
+    if (!window.confirm('Revoke this token? It will become inactive immediately.')) return
+    setError('')
+    setMessage('')
+    try {
+      await revokeToken(tokenId)
+      setMessage('Token revoked.')
+      const freshHistory = await getTokenHistory()
+      setTokenHistory(freshHistory)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const handleDeleteToken = async (tokenId) => {
+    if (!window.confirm('Delete this token permanently? This action cannot be undone.')) return
+    setError('')
+    setMessage('')
+    try {
+      await deleteToken(tokenId)
+      setMessage('Token deleted.')
+      const freshHistory = await getTokenHistory()
+      setTokenHistory(freshHistory)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const handleBulkDeleteExpired = async () => {
+    const expiredCount = tokenHistory.filter(t => !t.active).length
+    if (!expiredCount) return
+    if (!window.confirm(`Delete ${expiredCount} expired tokens? This action cannot be undone.`)) return
+    setError('')
+    setMessage('')
+    try {
+      const deleted = await bulkDeleteExpiredTokens()
+      setMessage(`Deleted ${deleted} expired tokens.`)
+      const freshHistory = await getTokenHistory()
+      setTokenHistory(freshHistory)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const handleCopyToken = async (token) => {
+    try {
+      await navigator.clipboard.writeText(token)
+      setMessage('Token copied to clipboard.')
+    } catch {
+      setError('Clipboard copy not available in this browser.')
+    }
+  }
+
+  const exportAttendanceRange = () => {
+    const rows = attendanceRangeData.map((log) => ({
+      Date: log.date,
+      Time: log.clientTs,
+      Employee: log.employeeName,
+      Action: log.action,
+      Token: log.token,
+      GPS: log.gps ? `${log.gps.lat},${log.gps.lng}` : '',
+    }))
+    downloadCsv(`attendance-${attendanceRangeStart}-to-${attendanceRangeEnd}.csv`, rows)
+    setMessage(`Exported ${rows.length} records.`)
   }
 
   const openEmployeeDetail = (employee) => {
@@ -2137,9 +2337,25 @@ export function AdminPage({ user }) {
                     <span className="muted">{item.checkOutAt ? `Out ${formatClock(item.checkOutAt)}` : ''}</span>
                     <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} • Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
                   </div>
-                  <div className="row gap" style={{ marginTop: 8 }}>
+<div className="row gap" style={{ marginTop: 8 }}>
                     <button type="button" className="ghost" onClick={() => openEmployeeDetail(item)}>View detail</button>
                     <button type="button" className="ghost" onClick={() => startEditEmployee(item)}>Edit</button>
+                    <button 
+                      type="button" 
+                      className="ghost" 
+                      onClick={async () => {
+                        const inviteUrl = `${window.location.origin}/employee?i=${encodeURIComponent(item.email)}`
+                        try {
+                          await navigator.clipboard.writeText(inviteUrl)
+                          setMessage(`Invite copied: ${inviteUrl.slice(0, 50)}...`)
+                        } catch {
+                          navigator.clipboard.writeText(inviteUrl)
+                        }
+                      }}
+                      title="Copy employee invite link"
+                    >
+                      📧 Invite
+                    </button>
                     <button type="button" className="ghost danger" onClick={() => removeEmployee(item)}>Remove</button>
                   </div>
                 </article>
@@ -2759,11 +2975,7 @@ export function AdminPage({ user }) {
                       Expires: t.expiresAt
                     })))}>Export CSV</button>
                     {tokenHistory.filter(t => !t.active).length > 0 && (
-                      <button className="ghost danger" onClick={() => {
-                        if (confirm(`Delete ${tokenHistory.filter(t => !t.active).length} expired tokens?`)) {
-                          setMessage('Bulk cleanup WIP')
-                        }
-                      }}>
+                      <button className="ghost danger" onClick={handleBulkDeleteExpired}>
                         Clean Expired ({tokenHistory.filter(t => !t.active).length})
                       </button>
                     )}
@@ -2846,15 +3058,18 @@ export function AdminPage({ user }) {
                   <div className="row gap" style={{alignItems: 'end'}}>
                     <label style={{flex: 1}}>
                       <strong>Search Tokens</strong>
-                      <input placeholder="Filter by token, scans, status..." />
+                      <input 
+                        value={tokenSearch}
+                        onChange={(e) => setTokenSearch(e.target.value)}
+                        placeholder="Filter by token, scans, status..." 
+                      />
                     </label>
                     <label>
                       <strong>Status</strong>
-                      <select>
-                        <option>All Tokens</option>
-                        <option>Active Only</option>
-                        <option>Expired</option>
-
+                      <select value={tokenStatusFilter} onChange={(e) => setTokenStatusFilter(e.target.value)}>
+                        <option value="all">All Tokens</option>
+                        <option value="active">Active Only</option>
+                        <option value="expired">Expired</option>
                       </select>
                     </label>
                   </div>
@@ -2862,7 +3077,7 @@ export function AdminPage({ user }) {
 
                 {/* Token History Table */}
                 <section className="card">
-                  <h3>Token History <span className="muted" style={{fontSize: '14px'}}>({tokenHistory.length})</span></h3>
+                  <h3>Token History <span className="muted" style={{fontSize: '14px'}}>({filteredTokens.length})</span></h3>
                   <div className="table-wrap">
                     <table className="admin-table">
                       <thead>
@@ -2876,7 +3091,7 @@ export function AdminPage({ user }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {tokenHistory.map((token, idx) => (
+                        {filteredTokens.map((token, idx) => (
                           <tr key={token.id || idx}>
                             <td><code>{token.token.slice(0,12)}...</code></td>
                             <td>
@@ -2889,11 +3104,11 @@ export function AdminPage({ user }) {
                             <td>{formatRelative(token.expiresAt)}</td>
                             <td>
                               <div className="row gap">
-                                <button className="ghost btn-sm">Copy</button>
+                                <button className="ghost btn-sm" onClick={() => handleCopyToken(token.token)}>Copy</button>
                                 {token.active ? (
-                                  <button className="ghost btn-sm warning">Revoke</button>
+                                  <button className="ghost btn-sm warning" onClick={() => handleRevokeToken(token.token)}>Revoke</button>
                                 ) : (
-                                  <button className="ghost btn-sm danger">Delete</button>
+                                  <button className="ghost btn-sm danger" onClick={() => handleDeleteToken(token.token)}>Delete</button>
                                 )}
                               </div>
                             </td>
@@ -2904,37 +3119,115 @@ export function AdminPage({ user }) {
                   </div>
                 </section>
 
-                {/* Analytics Dashboard */}
-                <section className="grid two gap">
+                {/* Validation Alerts */}
+                {tokenValidationWarnings.length > 0 && (
                   <section className="card">
-                    <h3>Scan Trends</h3>
-                    <div className="mini-chart">
-                      {tokenHistory.slice(0, 10).map((token, i) => (
-                        <div key={i} className="mini-col">
-                          <div className="mini-stack" style={{height: '140px'}}>
-                            <div className={`mini-seg ${token.scansCount > 5 ? 'ok' : 'neutral'}`} 
-                                 style={{height: `${Math.min(140, (token.scansCount || 0) * 12)}px`}} 
-                                 title={`${token.scansCount || 0} scans`} />
+                    <h3>⚠️ System Alerts</h3>
+                    <div className="validation-alerts">
+                      {tokenValidationWarnings.map((warning, idx) => (
+                        <article key={idx} className={`validation-alert ${warning.severity}`}>
+                          <div className="validation-alert-content">
+                            <strong>{warning.type === 'rotation' ? 'Security' : warning.type === 'multi-active' ? 'Configuration' : 'Connectivity'}</strong>
+                            <p>{warning.message}</p>
                           </div>
-                          <span style={{fontSize: '12px'}}>{token.token.slice(0,4)}</span>
-                        </div>
+                          <div className="validation-alert-actions">
+                            {warning.type === 'rotation' && (
+                              <button className="ghost btn-sm" onClick={regenerateToken}>Rotate Token</button>
+                            )}
+                            {warning.type === 'multi-active' && (
+                              <button className="ghost btn-sm" onClick={() => setTokenStatusFilter('active')}>View Active</button>
+                            )}
+                          </div>
+                        </article>
                       ))}
                     </div>
                   </section>
+                )}
+
+                {/* Attendance Range Export */}
+                <section className="card">
+                  <div className="row between wrap" style={{ gap: 16 }}>
+                    <div>
+                      <h3 style={{ marginBottom: 4 }}>Attendance Export</h3>
+                      <p className="muted" style={{ margin: 0 }}>Export attendance logs for reports and audits.</p>
+                    </div>
+                    <div className="row gap wrap">
+                      <label>
+                        <span className="muted">From</span>
+                        <input 
+                          type="date" 
+                          value={attendanceRangeStart} 
+                          onChange={(e) => setAttendanceRangeStart(e.target.value)} 
+                        />
+                      </label>
+                      <label>
+                        <span className="muted">To</span>
+                        <input 
+                          type="date" 
+                          value={attendanceRangeEnd} 
+                          onChange={(e) => setAttendanceRangeEnd(e.target.value)} 
+                        />
+                      </label>
+                      <button 
+                        className="ghost" 
+                        onClick={exportAttendanceRange}
+                        disabled={attendanceRangeLoading || !attendanceRangeData.length}
+                      >
+                        {attendanceRangeLoading ? 'Loading...' : `Export CSV (${attendanceRangeData.length})`}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Analytics Dashboard */}
+                <section className="grid two gap">
                   <section className="card">
-                    <h3>Token Stats</h3>
+                    <h3>Scan Activity (Last 7 Days)</h3>
+                    {tokenStatsLoading ? (
+                      <div className="mini-chart-loading muted">Loading activity data...</div>
+                    ) : tokenStats?.byHour?.length > 0 ? (
+                      <div className="mini-chart">
+                        {tokenStats.byHour.slice(-24).map((hour, i) => (
+                          <div key={i} className="mini-col">
+                            <div className="mini-stack" style={{height: '140px'}}>
+                              <div className="mini-seg ok" 
+                                   style={{height: `${Math.min(140, (hour.count / Math.max(1, tokenStats.peakHour?.count || 1)) * 140)}px`}} 
+                                   title={`${hour.count} scans at ${hour.hour.slice(-5)}`} />
+                            </div>
+                            <span style={{fontSize: '10px'}}>{new Date(hour.hour).toLocaleTimeString('en-US', {hour: '2-digit', hour12: false})}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mini-chart-empty muted">No scan data available</div>
+                    )}
+                  </section>
+                  <section className="card">
+                    <h3>Performance Metrics</h3>
                     <div className="stats-grid three">
                       <article className="stat-card ok">
                         <h3>{tokenHistory.filter(t => t.active).length}</h3>
-                        <p>Active</p>
+                        <p>Active Tokens</p>
+                      </article>
+                      <article className="stat-card">
+                        <h3>{tokenStats?.avgPerHour ? Math.round(tokenStats.avgPerHour * 10) / 10 : 0}</h3>
+                        <p>Avg Scans/Hour</p>
+                      </article>
+                      <article className="stat-card">
+                        <h3>{tokenStats?.peakHour ? tokenStats.peakHour.count : 0}</h3>
+                        <p>Peak Hour</p>
                       </article>
                       <article className="stat-card danger">
                         <h3>{tokenHistory.filter(t => !t.active).length}</h3>
-                        <p>Expired</p>
+                        <p>Expired Tokens</p>
                       </article>
                       <article className="stat-card">
                         <h3>{tokenHistory.reduce((sum,t)=>sum+(t.scansCount||0),0)}</h3>
                         <p>Total Scans</p>
+                      </article>
+                      <article className="stat-card ok">
+                        <h3>{Math.round((tokenHistory.filter(t => t.active && (t.scansCount || 0) > 0).length / Math.max(1, tokenHistory.filter(t => t.active).length)) * 100)}%</h3>
+                        <p>Active Usage</p>
                       </article>
                     </div>
                   </section>

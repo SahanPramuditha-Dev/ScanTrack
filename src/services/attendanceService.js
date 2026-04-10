@@ -1,4 +1,5 @@
-import {
+when a new user try to check in it shows as insufficient permissions 
+but i have created the user as an employeeimport {
   onAuthStateChanged,
   signInWithPopup,
   signOut as firebaseSignOut,
@@ -1083,6 +1084,22 @@ export async function getAdminLogs() {
   return readJson('scantrack_demo_action_logs', []).sort((a, b) => b.clientTs.localeCompare(a.clientTs))
 }
 
+export async function getAttendanceByDateRange(startDate, endDate) {
+  if (isFirebaseConfigured) {
+    const logsQuery = query(
+      collection(db, 'attendance_logs'),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate),
+      orderBy('date', 'desc'),
+    )
+    const snapshot = await getDocs(logsQuery)
+    return snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+  }
+
+  const logs = readJson('scantrack_demo_action_logs', [])
+  return logs.filter((log) => log.date >= startDate && log.date <= endDate).sort((a, b) => b.date.localeCompare(a.date))
+}
+
 export async function getShopGps() {
   const settings = await getAdminSettings()
   return settings.shopGps || APP_CONFIG.shopGps
@@ -1673,6 +1690,9 @@ export async function getEmployeeProfile(userId) {
       }
       return null
     } catch (error) {
+      if (error.code === 'permission-denied') {
+        throw new Error('Insufficient permissions - employee profile not found. Ask admin to create your account with the exact Google email used for sign-in.');
+      }
       console.warn('Error getting employee profile:', error)
       return null
     }
@@ -2069,6 +2089,106 @@ export function toLogExportRows(records) {
     GPS: record.gps || '-',
     Token: record.token || '-',
   }))
+}
+
+// Token management functions
+export async function revokeToken(tokenId) {
+  if (isFirebaseConfigured) {
+    const tokenRef = doc(db, 'qr_tokens', tokenId)
+    await setDoc(tokenRef, { active: false, revokedAt: serverTimestamp() }, { merge: true })
+    return
+  }
+  
+  const history = readJson(DEMO_TOKENS_KEY, [])
+  const idx = history.findIndex((t) => t.token === tokenId)
+  if (idx >= 0) {
+    history[idx].active = false
+  }
+  writeJson(DEMO_TOKENS_KEY, history)
+}
+
+export async function deleteToken(tokenId) {
+  if (isFirebaseConfigured) {
+    await deleteDoc(doc(db, 'qr_tokens', tokenId))
+    return
+  }
+  
+  const history = readJson(DEMO_TOKENS_KEY, [])
+  const filtered = history.filter((t) => t.token !== tokenId)
+  writeJson(DEMO_TOKENS_KEY, filtered)
+}
+
+export async function bulkDeleteExpiredTokens() {
+  if (isFirebaseConfigured) {
+    const query = query(collection(db, 'qr_tokens'), where('active', '==', false), where('expiresAtMs', '<', Date.now()))
+    const snapshot = await getDocs(query)
+    const batch = [];
+    snapshot.docs.forEach((docItem) => {
+      batch.push(deleteDoc(docItem.ref))
+    })
+    await Promise.all(batch)
+    return snapshot.docs.length
+  }
+  
+  const history = readJson(DEMO_TOKENS_KEY, [])
+  const filtered = history.filter((t) => t.active !== false || new Date(t.expiresAt).getTime() >= Date.now())
+  const deleted = history.length - filtered.length
+  writeJson(DEMO_TOKENS_KEY, filtered)
+  return deleted
+}
+
+export async function getTokenStats(dateRangeStart, dateRangeEnd) {
+  if (isFirebaseConfigured) {
+    const logsQuery = query(
+      collection(db, 'attendance_logs'),
+      where('clientTs', '>=', dateRangeStart),
+      where('clientTs', '<=', dateRangeEnd),
+      orderBy('clientTs', 'asc'),
+    )
+    const snapshot = await getDocs(logsQuery)
+    const logs = snapshot.docs.map((doc) => doc.data())
+    
+    // Aggregate scan activity by hour
+    const byHour = new Map()
+    logs.forEach((log) => {
+      if (!log.clientTs) return
+      const hourKey = new Date(log.clientTs).toISOString().slice(0, 13)
+      byHour.set(hourKey, (byHour.get(hourKey) || 0) + 1)
+    })
+    
+    const hours = Array.from(byHour.entries()).map(([hour, count]) => ({ hour, count }))
+    const peakHour = hours.length > 0 ? hours.reduce((max, h) => h.count > max.count ? h : max) : null
+    const avgPerHour = logs.length / Math.max(1, hours.length)
+    
+    return {
+      totalScans: logs.length,
+      byHour: hours,
+      peakHour,
+      avgPerHour: Math.round(avgPerHour * 100) / 100,
+    }
+  }
+  
+  // Demo mode
+  const logs = readJson('scantrack_demo_action_logs', [])
+  const filtered = logs.filter((log) => log.clientTs >= dateRangeStart && log.clientTs <= dateRangeEnd)
+  
+  const byHour = new Map()
+  filtered.forEach((log) => {
+    if (!log.clientTs) return
+    const hourKey = new Date(log.clientTs).toISOString().slice(0, 13)
+    byHour.set(hourKey, (byHour.get(hourKey) || 0) + 1)
+  })
+  
+  const hours = Array.from(byHour.entries()).map(([hour, count]) => ({ hour, count }))
+  const peakHour = hours.length > 0 ? hours.reduce((max, h) => h.count > max.count ? h : max) : null
+  const avgPerHour = filtered.length / Math.max(1, hours.length)
+  
+  return {
+    totalScans: filtered.length,
+    byHour: hours,
+    peakHour,
+    avgPerHour: Math.round(avgPerHour * 100) / 100,
+  }
 }
 
 export function formatAuthName(user) {

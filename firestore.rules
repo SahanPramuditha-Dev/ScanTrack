@@ -9,6 +9,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.role == 'admin';
     }
 
+    function normalizedEmail() {
+      return request.auth != null ? request.auth.token.email.trim().toLowerCase() : null;
+    }
+
     function isAdminProfile() {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/employees/$(request.auth.uid)) &&
@@ -43,7 +47,7 @@ service cloud.firestore {
     match /employees/{userId} {
       allow read: if isOwner(userId) ||
         isAdmin() ||
-        (isSignedIn() && resource.data.email == request.auth.token.email);
+        (isSignedIn() && resource.data.email == normalizedEmail());
 
       allow create: if isAdmin();
       allow update: if isAdmin();

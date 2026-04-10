@@ -1,14 +1,23 @@
-# Fix AdminPage.jsx Parse Errors - Progress Tracker
+# ScanTrack Employee Permissions Fix - COMPLETE SOLUTION
+Status: ✅ **Plan Approved** | Progress: 0/8
 
-## Steps:
-- [x] 1. Create TODO.md ✅
-- [x] 2. Fix garbled characters and malformed close button (Ã— → ×)
-- [x] 3. Add missing `</section>` for admin-main 
-- [x] 4. Add missing `</main>` closing tag
-- [x] 5. Verify JSX structure complete
-- [x] 6. Test build/dev server (vite running on port 5174 - no parse errors)
-- [x] 7. Update TODO.md with completion
+## Goals
+- Fix "insufficient permissions" for new employees
+- Enable auto-provisioning by email match
+- Add invite links for seamless onboarding
 
-**Status:** ✅ Fixed! Dev server running clean: `VITE v8.0.8 ready in 981 ms ➜ Local: http://localhost:5174/`
+## Steps (Phase 1: Email Normalization + Rules)
 
-**Next:** Navigate to Admin page to confirm functionality. All original parse errors resolved.
+### 1. [ ] Create TODO.md ✅ **DONE**
+### 2. [ ] Edit AdminPage.jsx - Email normalization
+### 3. [ ] Edit firestore.rules - normalizedEmail()
+### 4. [ ] Edit attendanceService.js - Better errors
+### 5. [ ] Edit EmployeePage.jsx - Invite support  
+### 6. [ ] Edit AdminPage.jsx - Generate invite links
+### 7. [ ] Deploy: firebase deploy --only firestore:rules
+### 8. [ ] Test full flow + attempt_completion
+
+**Current: Ready for step 2 → AdminPage.jsx email normalization**
+
+**Run**: Reply after each step confirmation
+
