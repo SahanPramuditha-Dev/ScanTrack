@@ -2289,11 +2289,11 @@ await createEmployeeByAdmin({
                       <option value="admin">Admin</option>
                     </select>
                   </label>
-                  <label>Payroll Role
+                  <label>Payroll Role (optional)
                     <select value={newEmpRoleName} onChange={(e) => setNewEmpRoleName(e.target.value)}>
-                      <option value="">Select role</option>
+                      <option value="">No payroll role</option>
                         {roles.map((role) => (
-                          <option key={role.id || role.roleName} value={role.roleName}>{role.roleName}</option>
+                          <option key={role.id || role.roleName} value={role.roleName}>{role.roleName} ({role.payType})</option>
                         ))}
                     </select>
                   </label>

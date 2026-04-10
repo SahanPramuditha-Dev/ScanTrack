@@ -1,5 +1,4 @@
-when a new user try to check in it shows as insufficient permissions 
-but i have created the user as an employeeimport {
+import {
   onAuthStateChanged,
   signInWithPopup,
   signOut as firebaseSignOut,
@@ -818,7 +817,7 @@ export async function submitAttendance({ user, token, action }) {
   }
 
   const uid = user.uid || user.id
-  const employeeProfile = await getEmployeeProfile(uid).catch(() => null)
+  const employeeProfile = await getEmployeeProfile(user).catch(() => null)
   const dailyRateSnapshot = Number(employeeProfile?.dailyRate || user.dailyRate || 0) || 0
 
   if (isFirebaseConfigured) {
