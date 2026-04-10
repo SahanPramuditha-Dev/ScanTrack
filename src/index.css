@@ -79,6 +79,7 @@ button {
   padding: 0 14px;
   font-weight: 700;
   cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 button:disabled {
@@ -86,10 +87,54 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(15, 14, 13, 0.12);
+}
+
 button.ghost {
   background: transparent;
   color: var(--ink);
   border: 1px solid var(--paper3);
+}
+
+a.ghost:hover,
+button.ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+  border-color: color-mix(in srgb, var(--gold) 28%, var(--paper3));
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--gold) 35%, transparent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  a.ghost {
+    transition: none;
+  }
+
+  button:hover:not(:disabled) {
+    transform: none;
+    box-shadow: none;
+  }
+}
+
+a.ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--paper3);
+  font-weight: 700;
 }
 
 code {

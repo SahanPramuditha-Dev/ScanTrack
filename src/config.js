@@ -6,4 +6,9 @@ export const APP_CONFIG = {
   gracePeriodMinutes: Number(import.meta.env.VITE_GRACE_MINUTES || 10),
   tokenRefreshSeconds: Number(import.meta.env.VITE_TOKEN_REFRESH_SECONDS || 60),
   tokenLength: Number(import.meta.env.VITE_TOKEN_LENGTH || 8),
+  shopGps: {
+    lat: Number(import.meta.env.VITE_SHOP_LAT || 6.9271), // Colombo default
+    lng: Number(import.meta.env.VITE_SHOP_LNG || 79.8612),
+  },
+  verificationRadiusMeters: Number(import.meta.env.VITE_VERIFY_RADIUS || 100),
 }

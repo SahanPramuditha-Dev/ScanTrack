@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app'
 import { getAnalytics } from 'firebase/analytics'
 import { getAuth, GoogleAuthProvider } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
+import { getFunctions } from 'firebase/functions'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -20,15 +21,17 @@ let auth = null
 let db = null
 let googleProvider = null
 let analytics = null
+let functions = null
 
 if (isFirebaseConfigured) {
   app = initializeApp(firebaseConfig)
   auth = getAuth(app)
   db = getFirestore(app)
+  functions = getFunctions(app)
   googleProvider = new GoogleAuthProvider()
   if (typeof window !== 'undefined') {
     analytics = getAnalytics(app)
   }
 }
 
-export { app, auth, db, googleProvider, analytics, isFirebaseConfigured }
+export { app, auth, db, googleProvider, analytics, functions, isFirebaseConfigured }

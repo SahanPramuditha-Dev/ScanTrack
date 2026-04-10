@@ -21,7 +21,9 @@ export function TopNav({ pathname, user, onSignOut }) {
           { href: '/admin', label: 'Admin' },
         ]
       : [{ href: '/employee', label: 'Employee' }]
-    : [{ href: '/login', label: 'Login' }]
+    : pathname === '/tv'
+      ? [{ href: '/tv', label: 'TV Display' }, { href: '/login', label: 'Login' }]
+      : [{ href: '/login', label: 'Login' }]
 
   return (
     <header className="top-nav">

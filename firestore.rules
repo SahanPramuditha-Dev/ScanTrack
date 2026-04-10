@@ -5,53 +5,74 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function adminByClaim() {
+    function isAdminClaim() {
       return isSignedIn() && request.auth.token.role == 'admin';
     }
 
-    function adminByProfile() {
+    function isAdminProfile() {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/employees/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/employees/$(request.auth.uid)).data.role == 'admin';
     }
 
     function isAdmin() {
-      return adminByClaim() || adminByProfile();
+      return isAdminClaim() || isAdminProfile();
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function validTokenScanUpdate() {
+      let prevScans = (resource.data.scansCount is int) ? resource.data.scansCount : 0;
+      return isSignedIn() &&
+        resource.data.active is bool &&
+        resource.data.active == true &&
+        request.resource.data.active == false &&
+        request.resource.data.lastUsedBy == request.auth.uid &&
+        request.resource.data.scansCount == (prevScans + 1) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'active',
+          'lastUsedAt',
+          'lastUsedBy',
+          'scansCount',
+          'updatedAt'
+        ]);
     }
 
     match /employees/{userId} {
-      allow read: if isSignedIn() &&
-        (
-          request.auth.uid == userId ||
-          isAdmin() ||
-          resource.data.email == request.auth.token.email
-        );
+      allow read: if isOwner(userId) ||
+        isAdmin() ||
+        (isSignedIn() && resource.data.email == request.auth.token.email);
 
-      allow create: if isSignedIn() &&
-        request.auth.uid == userId &&
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+
+      allow create: if isOwner(userId) &&
         request.resource.data.keys().hasOnly(['name', 'email', 'role', 'active', 'createdAt', 'updatedAt']) &&
         request.resource.data.email == request.auth.token.email &&
         request.resource.data.role == 'employee';
 
-      allow update: if isSignedIn() && request.auth.uid == userId &&
+      allow update: if isOwner(userId) &&
         request.resource.data.keys().hasOnly(['name', 'email', 'role', 'active', 'createdAt', 'updatedAt']) &&
         request.resource.data.email == resource.data.email &&
         request.resource.data.role == resource.data.role;
-
-      allow write: if isAdmin();
     }
 
     match /attendance_daily/{docId} {
-      allow read: if isSignedIn() && (isAdmin() || request.auth.uid == resource.data.userId);
+      allow read: if isAdmin() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid);
 
       allow create: if isSignedIn() &&
         request.resource.data.userId == request.auth.uid &&
         docId.matches(request.auth.uid + '_.*');
 
-      allow update: if isSignedIn() &&
-        resource.data.userId == request.auth.uid &&
-        request.resource.data.userId == resource.data.userId &&
-        request.resource.data.date == resource.data.date;
+      allow update: if isAdmin() ||
+        (isSignedIn() &&
+          resource.data.userId == request.auth.uid &&
+          request.resource.data.userId == resource.data.userId &&
+          request.resource.data.date == resource.data.date);
 
       allow delete: if isAdmin();
     }
@@ -65,11 +86,29 @@ service cloud.firestore {
 
     match /qr_tokens/{tokenId} {
       allow read: if isSignedIn();
-      allow create, update: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || validTokenScanUpdate();
       allow delete: if isAdmin();
     }
 
     match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /salary_records/{docId} {
+      allow read: if isAdmin() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    match /daily_payments/{docId} {
+      allow read: if isAdmin() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    match /roles/{roleId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }

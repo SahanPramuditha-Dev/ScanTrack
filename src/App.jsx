@@ -68,7 +68,7 @@ function App() {
     )
   }
 
-  if (!user && pathname !== '/login') {
+  if (!user && pathname !== '/login' && pathname !== '/tv') {
     navigate('/login')
     return null
   }
@@ -79,11 +79,6 @@ function App() {
   }
 
   if (user && pathname === '/admin' && !isAdmin) {
-    navigate('/employee')
-    return null
-  }
-
-  if (user && pathname === '/tv' && !isAdmin) {
     navigate('/employee')
     return null
   }

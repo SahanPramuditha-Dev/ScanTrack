@@ -14,9 +14,17 @@ function requireAuth(request) {
   return request.auth.uid
 }
 
-function requireAdmin(request) {
+async function isAdminUid(uid, token = null) {
+  if (!uid) return false
+  if (token?.role === 'admin') return true
+  const snap = await db.collection('employees').doc(uid).get().catch(() => null)
+  return snap.exists && snap.data()?.role === 'admin'
+}
+
+async function requireAdmin(request) {
   const uid = requireAuth(request)
-  if (request.auth.token.role !== 'admin') {
+  const ok = await isAdminUid(uid, request.auth?.token || null)
+  if (!ok) {
     throw new HttpsError('permission-denied', 'Admin access required.')
   }
 
@@ -35,6 +43,12 @@ function todayKey(date = new Date()) {
 function makeToken() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+}
+
+function normalizeRefreshSeconds(value) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 60
+  return Math.max(60, Math.round(parsed))
 }
 
 async function getEmployee(uid) {
@@ -60,18 +74,37 @@ async function getDailyRecord(uid, date) {
 }
 
 export const issueTvToken = onCall(async (request) => {
-  requireAdmin(request)
-
   const branchId = request.data?.branchId || 'main-floor'
+  const requestedRefresh = normalizeRefreshSeconds(request.data?.refreshSeconds)
+  const displaySessionToken = String(request.data?.displaySessionToken || '').trim()
+  let issuedBy = null
+
+  if (displaySessionToken) {
+    const sessionSnap = await db.collection('tv_sessions').doc(displaySessionToken).get()
+    if (!sessionSnap.exists) {
+      throw new HttpsError('failed-precondition', 'TV display session not found.')
+    }
+    const session = sessionSnap.data()
+    if (session?.active === false) {
+      throw new HttpsError('failed-precondition', 'TV display session is inactive.')
+    }
+    issuedBy = session?.issuedBy || null
+  } else {
+    issuedBy = await requireAdmin(request)
+  }
+
   const token = makeToken()
   const now = Date.now()
-  const expiresAt = now + 60 * 1000
+  const expiresAt = now + requestedRefresh * 1000
 
   await db.collection('qr_tokens').doc(token).set({
     token,
     branchId,
     active: true,
     usedBy: null,
+    issuedBy,
+    scansCount: 0,
+    displaySessionId: displaySessionToken || null,
     issuedAt: FieldValue.serverTimestamp(),
     expiresAtMs: expiresAt,
   })
@@ -79,8 +112,43 @@ export const issueTvToken = onCall(async (request) => {
   return {
     token,
     branchId,
+    expiresAtMs: expiresAt,
+    issuedAtMs: now,
     expiresAt: new Date(expiresAt).toISOString(),
     issuedAt: new Date(now).toISOString(),
+  }
+})
+
+export const createTvDisplaySession = onCall(async (request) => {
+  const uid = await requireAdmin(request)
+  const refreshInterval = normalizeRefreshSeconds(request.data?.refreshSeconds)
+  const origin = String(request.data?.origin || '').trim()
+
+  const existing = await db.collection('tv_sessions').where('active', '==', true).limit(1).get()
+  const sessionId = existing.empty ? makeToken() : existing.docs[0].id
+  const now = Date.now()
+  const expiresAtMs = now + (10 * 365 * 24 * 60 * 60 * 1000)
+
+  await db.collection('tv_sessions').doc(sessionId).set({
+    active: true,
+    issuedBy: uid,
+    refreshInterval,
+    issuedAtMs: now,
+    expiresAtMs,
+    updatedAt: FieldValue.serverTimestamp(),
+    issuedAt: FieldValue.serverTimestamp(),
+  }, { merge: true })
+
+  return {
+    id: sessionId,
+    sessionToken: sessionId,
+    refreshInterval,
+    issuedBy: uid,
+    issuedAtMs: now,
+    expiresAtMs,
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    launchUrl: origin ? `${origin}/tv?ds=${encodeURIComponent(sessionId)}` : '',
   }
 })
 
@@ -117,6 +185,17 @@ export const recordAttendance = onCall(async (request) => {
   const date = todayKey()
   const ts = new Date().toISOString()
 
+  // Get role and rate
+  let roleWorked = employee.roleName || 'employee'
+  let rateUsed = 0
+  if (employee.roleName) {
+    const roleSnap = await db.collection('roles').where('roleName', '==', employee.roleName).limit(1).get()
+    if (!roleSnap.empty) {
+      const roleData = roleSnap.docs[0].data()
+      rateUsed = roleData.rate || 0
+    }
+  }
+
   const daily = await getDailyRecord(uid, date)
 
   if (action === 'checkIn') {
@@ -128,6 +207,8 @@ export const recordAttendance = onCall(async (request) => {
       userId: uid,
       date,
       employeeName: employee.name || employee.email || uid,
+      roleWorked,
+      rateUsed,
       checkInAt: ts,
       checkOutAt: null,
       late: false,

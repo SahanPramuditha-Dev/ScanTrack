@@ -8,6 +8,10 @@ const formatDate = (date) =>
     day: '2-digit',
   }).format(date)
 
+export function formatDateKey(date) {
+  return formatDate(date)
+}
+
 const formatTime = (date) =>
   new Intl.DateTimeFormat('en-US', {
     timeZone: APP_CONFIG.timezone,
