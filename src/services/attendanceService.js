@@ -471,10 +471,16 @@ async function enrichFirebaseUser(firebaseUser) {
   const profileRef = doc(db, 'employees', firebaseUser.uid)
   let profile = null
   let invited = null
+  let profileReadError = null
+  let inviteReadError = null
 
-  const profileSnap = await getDoc(profileRef).catch(() => null)
-  if (profileSnap?.exists()) {
-    profile = profileSnap.data()
+  try {
+    const profileSnap = await getDoc(profileRef)
+    if (profileSnap?.exists()) {
+      profile = profileSnap.data()
+    }
+  } catch (error) {
+    profileReadError = error
   }
 
   if (normalizedEmail) {
@@ -483,12 +489,16 @@ async function enrichFirebaseUser(firebaseUser) {
       where('email', '==', normalizedEmail),
       limit(10),
     )
-    const inviteSnap = await getDocs(inviteQuery).catch(() => null)
-    const inviteCandidates = (inviteSnap?.docs || []).map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-    invited = inviteCandidates.find((row) => row.active !== false && row.role === 'admin')
-      || inviteCandidates.find((row) => row.active !== false)
-      || inviteCandidates[0]
-      || null
+    try {
+      const inviteSnap = await getDocs(inviteQuery)
+      const inviteCandidates = (inviteSnap?.docs || []).map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+      invited = inviteCandidates.find((row) => row.active !== false && row.role === 'admin')
+        || inviteCandidates.find((row) => row.active !== false)
+        || inviteCandidates[0]
+        || null
+    } catch (error) {
+      inviteReadError = error
+    }
   }
 
   // Employees are often pre-created by admin under a generated document id, not their Firebase UID.
@@ -530,8 +540,14 @@ async function enrichFirebaseUser(firebaseUser) {
     }
   }
 
+  if (!profile && !invited && (profileReadError?.code === 'permission-denied' || inviteReadError?.code === 'permission-denied')) {
+    setAuthError('Access denied because employee profile lookup is blocked by Firestore rules. Deploy the latest firestore rules, then try signing in again.')
+    await firebaseSignOut(auth)
+    return null
+  }
+
   if (!profile) {
-    setAuthError('Access denied. Your account is not registered by admin yet.')
+    setAuthError(`Access denied. Signed in as ${normalizedEmail || 'unknown email'}, but no active employee record matched that email.`)
     await firebaseSignOut(auth)
     return null
   }
