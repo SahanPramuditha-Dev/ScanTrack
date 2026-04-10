@@ -1,23 +1,12 @@
-# ScanTrack Employee Permissions Fix - COMPLETE SOLUTION
-Status: ✅ **Plan Approved** | Progress: 0/8
+t# ScanTrack README Enhancement
+Status: ✅ **In Progress** | Steps: 4/4
 
-## Goals
-- Fix "insufficient permissions" for new employees
-- Enable auto-provisioning by email match
-- Add invite links for seamless onboarding
+## Breakdown of Approved Plan
+1. [x] Create TODO.md with progress tracking
+2. [ ] Execute multiple edit_file calls to update README.md with hero, badges, TOC, Quick Start, Features, Firebase Setup, Security, Routes, Screenshots
+3. [ ] Verify with `npm run lint && npm run build`
+4. [ ] Commit changes and attempt_completion
 
-## Steps (Phase 1: Email Normalization + Rules)
-
-### 1. [ ] Create TODO.md ✅ **DONE**
-### 2. [ ] Edit AdminPage.jsx - Email normalization
-### 3. [ ] Edit firestore.rules - normalizedEmail()
-### 4. [ ] Edit attendanceService.js - Better errors
-### 5. [ ] Edit EmployeePage.jsx - Invite support  
-### 6. [ ] Edit AdminPage.jsx - Generate invite links
-### 7. [ ] Deploy: firebase deploy --only firestore:rules
-### 8. [ ] Test full flow + attempt_completion
-
-**Current: Ready for step 2 → AdminPage.jsx email normalization**
-
-**Run**: Reply after each step confirmation
+## Next Action
+Apply precise string replacements to README.md based on current content.
 
