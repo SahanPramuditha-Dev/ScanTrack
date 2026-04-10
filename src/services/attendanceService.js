@@ -540,6 +540,31 @@ async function enrichFirebaseUser(firebaseUser) {
     }
   }
 
+  if (!profile && !invited) {
+    const pendingPayload = {
+      name: safeName(firebaseUser.email, firebaseUser.displayName),
+      email: firebaseUser.email || normalizedEmail,
+      role: 'employee',
+      active: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }
+
+    try {
+      await setDoc(profileRef, pendingPayload, { merge: true })
+      setAuthError('Your account was created and is pending admin approval.')
+      await firebaseSignOut(auth)
+      return null
+    } catch (error) {
+      if (error?.code === 'permission-denied') {
+        setAuthError('Access denied because pending employee creation is blocked by Firestore rules. Deploy the latest firestore rules, then try signing in again.')
+        await firebaseSignOut(auth)
+        return null
+      }
+      throw error
+    }
+  }
+
   if (!profile && !invited && (profileReadError?.code === 'permission-denied' || inviteReadError?.code === 'permission-denied')) {
     setAuthError('Access denied because employee profile lookup is blocked by Firestore rules. Deploy the latest firestore rules, then try signing in again.')
     await firebaseSignOut(auth)
@@ -553,7 +578,7 @@ async function enrichFirebaseUser(firebaseUser) {
   }
 
   if (profile.active === false) {
-    setAuthError('Access denied. Your account is inactive. Please contact admin.')
+    setAuthError('Your account is pending admin approval.')
     await firebaseSignOut(auth)
     return null
   }
@@ -1674,13 +1699,14 @@ export function summarizeAttendance(records) {
   }
 }
 
-export async function getEmployees() {
+export async function getEmployees(options = {}) {
+  const includeInactive = options?.includeInactive === true
   if (isFirebaseConfigured) {
     try {
       const snapshot = await getDocs(query(collection(db, 'employees'), orderBy('name', 'asc')))
       return snapshot.docs
         .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-        .filter((employee) => employee.active !== false)
+        .filter((employee) => includeInactive || employee.active !== false)
     } catch (error) {
       if (error?.code === 'permission-denied') {
         throw new Error('Cannot read employees. Ensure your user has admin role in employees collection.')
@@ -1690,7 +1716,7 @@ export async function getEmployees() {
     }
   }
 
-  return readJson(DEMO_USERS_KEY, []).filter((employee) => employee.active !== false)
+  return readJson(DEMO_USERS_KEY, []).filter((employee) => includeInactive || employee.active !== false)
 }
 
 export async function getEmployeeProfile(userOrId) {

@@ -285,7 +285,7 @@ export function AdminPage({ user }) {
         tokenHistoryData,
       ] = await Promise.all([
         getAdminLogs(date),
-        getEmployees(),
+        getEmployees({ includeInactive: true }),
         getAdminSettings(),
         getTokenHistory(),
       ])
