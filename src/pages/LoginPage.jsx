@@ -1,8 +1,12 @@
 import { useState } from 'react'
 import { APP_CONFIG } from '../config'
+import { useToast } from '../components/useToast'
+import { FloatingInput } from '../components/FormField'
+import { LoadingSpinner } from '../components/Loading'
 import { consumeAuthError, demoSignIn, isProductionMode, signInWithGoogle } from '../services/attendanceService'
 
 export function LoginPage() {
+  const toast = useToast()
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(consumeAuthError())
@@ -13,7 +17,7 @@ export function LoginPage() {
     try {
       await signInWithGoogle()
     } catch (err) {
-      setError(err.message)
+      toast.addToast(err.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -22,7 +26,7 @@ export function LoginPage() {
   const loginDemo = async (event) => {
     event.preventDefault()
     if (!email.trim()) {
-      setError('Enter your work email.')
+      toast.addToast('Enter your work email.', 'warning')
       return
     }
 
@@ -31,7 +35,7 @@ export function LoginPage() {
     try {
       await demoSignIn(email)
     } catch (err) {
-      setError(err.message)
+      toast.addToast(err.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -75,21 +79,17 @@ export function LoginPage() {
           </button>
         ) : (
           <form className="stack" onSubmit={loginDemo} data-anim="4">
-            <div className="floating-input">
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder=" "
-                required
-              />
-              <label htmlFor="email" className="floating-label">Work Email</label>
-            </div>
+            <FloatingInput
+              label="Work Email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
             <button type="submit" disabled={loading} className="login-main-btn">
               {loading ? (
                 <>
-                  <span className="spinner" aria-hidden="true" />
+                  <LoadingSpinner size="small" />
                   Signing in...
                 </>
               ) : (
@@ -97,6 +97,12 @@ export function LoginPage() {
               )}
             </button>
           </form>
+        )}
+
+        {error && (
+          <div className="login-error">
+            <p className="error-text">{error}</p>
+          </div>
         )}
 
         {error && <p className="error-text" data-anim="5">{error}</p>}

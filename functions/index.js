@@ -75,9 +75,9 @@ async function getDailyRecord(uid, date) {
 
 export const issueTvToken = onCall(async (request) => {
   const branchId = request.data?.branchId || 'main-floor'
-  const requestedRefresh = normalizeRefreshSeconds(request.data?.refreshSeconds)
   const displaySessionToken = String(request.data?.displaySessionToken || '').trim()
   let issuedBy = null
+  let refreshSeconds = normalizeRefreshSeconds(request.data?.refreshSeconds)
 
   if (displaySessionToken) {
     const sessionSnap = await db.collection('tv_sessions').doc(displaySessionToken).get()
@@ -89,13 +89,14 @@ export const issueTvToken = onCall(async (request) => {
       throw new HttpsError('failed-precondition', 'TV display session is inactive.')
     }
     issuedBy = session?.issuedBy || null
+    refreshSeconds = normalizeRefreshSeconds(session?.refreshInterval ?? refreshSeconds)
   } else {
     issuedBy = await requireAdmin(request)
   }
 
   const token = makeToken()
   const now = Date.now()
-  const expiresAt = now + requestedRefresh * 1000
+  const expiresAt = now + refreshSeconds * 1000
 
   await db.collection('qr_tokens').doc(token).set({
     token,

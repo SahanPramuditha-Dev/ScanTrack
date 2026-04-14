@@ -32,6 +32,18 @@ function formatClock(iso) {
   })
 }
 
+function formatSeconds(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '-'
+  if (seconds < 60) return `${seconds}s`
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+  if (hours) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`
+  }
+  return `${minutes}m ${String(secs).padStart(2, '0')}s`
+}
+
 function buildShiftBase(date, hhmm) {
   const [h, m] = String(hhmm || '00:00').split(':').map(Number)
   return new Date(`${date}T${String(h || 0).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}:00`)
@@ -70,7 +82,6 @@ export function TvPage() {
         hasDisplaySession
           ? { displaySessionToken, user: null }
           : user,
-        refreshSeconds,
       )
       setPayload(result)
       const diff = Math.max(0, Math.floor((new Date(result.expiresAt).getTime() - Date.now()) / 1000))
@@ -79,7 +90,7 @@ export function TvPage() {
     } catch (err) {
       setError(err.message)
     }
-  }, [displaySessionToken, hasDisplaySession, refreshSeconds, user])
+  }, [displaySessionToken, hasDisplaySession, user])
 
   useEffect(() => subscribeAuth(setUser), [])
 
@@ -250,8 +261,10 @@ export function TvPage() {
     <main className="layout tv-layout premium-tv tv-display-layout">
       <section className="tv-shell tv-display-shell">
         <div className="tv-grid-bg" aria-hidden="true" />
-        <h1 className="tv-display-title">WYBE FASHION</h1>
-        <p className="tv-display-sub">EMPLOYEE ATTENDANCE - CHECK-IN SYSTEM</p>
+        <h1 className="tv-display-title">{APP_CONFIG.companyName}</h1>
+        <p className="tv-display-sub">
+          {APP_CONFIG.branchId ? `Branch ${APP_CONFIG.branchId} • ` : ''}Employee attendance display
+        </p>
 
         {production && !hasDisplaySession && !user && (
           <section className="card tv-auth-card">
@@ -290,6 +303,13 @@ export function TvPage() {
             <div className="tv-display-meta">
               <span className="tv-pill tv-pill-date">Date {todayLabel}</span>
               <span className="tv-pill tv-pill-active">QR Active</span>
+              {APP_CONFIG.branchId ? <span className="tv-pill tv-pill-branch">{APP_CONFIG.branchId.toUpperCase()}</span> : null}
+            </div>
+
+            <div className="tv-display-intro">
+              <span className="tv-display-label">Live attendance</span>
+              <h2 className="tv-display-headline">Scan the QR to start your shift</h2>
+              <p className="tv-display-copy">Use the phone camera to check in and out instantly. This code refreshes automatically for safe, easy attendance tracking.</p>
             </div>
 
             <img src={buildQrUrl(payload.token)} alt="Attendance QR" className="qr-image tv-qr tv-display-qr" />
@@ -303,7 +323,7 @@ export function TvPage() {
 
             <div className="row gap center tv-display-refresh-row">
               <button className="ghost" onClick={loadToken}>Refresh Token</button>
-              <span className="muted">Valid for {secondsLeft}s</span>
+              <span className="muted">Valid for {formatSeconds(secondsLeft)}</span>
             </div>
           </section>
         )}

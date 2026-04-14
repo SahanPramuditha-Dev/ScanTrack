@@ -17,6 +17,7 @@ import {
   formatAuthName,
   generateSalaryForMonth,
   getAttendanceByDateRange,
+  getLateAlerts,
   getTokenHistory,
   getTokenStats,
   getAttendanceDailyForRange,
@@ -24,7 +25,11 @@ import {
   getAdminSettings,
   getDailyPaymentsForMonth,
   getEmployeeAttendanceForMonth,
+  getEmployeeSalaryRecords,
+  getActiveTvDisplaySession,
   getEmployees,
+  updateAttendanceDaily,
+  deleteAttendanceDaily,
   getRoles,
   createRole,
   updateRole,
@@ -43,6 +48,18 @@ import {
   updateDailyPayment,
   updateEmployeeByAdmin,
 } from '../services/attendanceService'
+import {
+  KpiCard,
+  AttendanceTrendChart,
+  LateArrivalsChart,
+  EmployeeStatusChart,
+  SalaryDistributionChart,
+  PayrollSummaryChart,
+} from '../components/AnalyticsCharts'
+import { useDashboardAnalytics } from '../hooks/useDashboardAnalytics'
+import { DataTable } from '../components/DataTable'
+import { DatePicker } from '../components/DatePicker'
+import { StatusBadge } from '../components/StatusBadge'
 
 const SECTIONS = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -97,6 +114,48 @@ function formatDurationMs(ms) {
   return `${h}h ${m}m`
 }
 
+function formatRefreshInterval(interval) {
+  if (!Number.isFinite(interval) || interval <= 0) return '-'
+  if (interval === 60) return '1m'
+  if (interval === 300) return '5m'
+  if (interval === 3600) return '1h'
+  if (interval === 86400) return 'Daily'
+  return `${interval}s`
+}
+
+function formatTimeOnlyForInput(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function buildIsoFromDateAndTime(dateKey, timeValue) {
+  if (!dateKey || !timeValue) return null
+  const [hours, minutes] = String(timeValue).split(':').map(Number)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+  return new Date(`${dateKey}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`).toISOString()
+}
+
+function formatSeconds(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '-'
+  if (seconds < 60) return `${seconds}s`
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+  if (hours) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`
+  }
+  return `${minutes}m ${String(secs).padStart(2, '0')}s`
+}
+
+function formatTokenSource(token) {
+  if (!token) return 'Unknown'
+  if (token.displaySessionId) return 'TV Session'
+  if (token.issuedBy) return 'Admin'
+  return 'System'
+}
+
 const ALERT_ACK_KEY = 'scantrack_alert_ack'
 const QR_REFRESH_OPTIONS = [60, 300, 3600, 86400]
 
@@ -148,7 +207,7 @@ function shiftDateKey(dateKey, days) {
   return formatDateKey(base)
 }
 
-export function AdminPage({ user }) {
+export function AdminPage({ user, pathname, routeSearch, navigate }) {
   const PAGE_SIZE = 12
   const WEEK = [
     { key: 'mon', label: 'Mon' },
@@ -204,6 +263,16 @@ export function AdminPage({ user }) {
   const [savingGps, setSavingGps] = useState(false)
   const [locatingGps, setLocatingGps] = useState(false)
   const [uiTick, setUiTick] = useState(0)
+  const [savingQrInterval, setSavingQrInterval] = useState(false)
+  const [activeTvSession, setActiveTvSession] = useState(null)
+  const [tokenExpiryFilter, setTokenExpiryFilter] = useState('all')
+  const [activeTokenSecondsLeft, setActiveTokenSecondsLeft] = useState(0)
+  const [dayCheckInTime, setDayCheckInTime] = useState('')
+  const [dayCheckOutTime, setDayCheckOutTime] = useState('')
+  const [savingAttendanceUpdate, setSavingAttendanceUpdate] = useState(false)
+  const [markAbsent, setMarkAbsent] = useState(false)
+  const [bulkMode, setBulkMode] = useState(false)
+  const [selectedDays, setSelectedDays] = useState(new Set())
 
   const [selectedEmployee, setSelectedEmployee] = useState('all')
   const [search, setSearch] = useState('')
@@ -242,6 +311,8 @@ export function AdminPage({ user }) {
   const [employeeDetailMonth, setEmployeeDetailMonth] = useState(getTodayKey().slice(0, 7))
   const [employeeDetailDateKey, setEmployeeDetailDateKey] = useState('')
   const [employeeDetailRows, setEmployeeDetailRows] = useState([])
+  const [employeeDetailSalaryRows, setEmployeeDetailSalaryRows] = useState([])
+  const [employeeDetailView, setEmployeeDetailView] = useState('month')
   const [employeeDetailLoading, setEmployeeDetailLoading] = useState(false)
   const [newEmpName, setNewEmpName] = useState('')
   const [newEmpEmail, setNewEmpEmail] = useState('')
@@ -283,17 +354,22 @@ export function AdminPage({ user }) {
         employeesData,
         settingsData,
         tokenHistoryData,
+        lateAlertsData,
+        activeTvSessionData,
       ] = await Promise.all([
         getAdminLogs(date),
         getEmployees({ includeInactive: true }),
         getAdminSettings(),
         getTokenHistory(),
+        getLateAlerts(date),
+        getActiveTvDisplaySession(),
       ])
       setLogs(logsData)
       setEmployees(employeesData)
       setDirectory(employeesData) // directory is same as employees
-      setAlerts([]) // TODO: implement alerts loading
+      setAlerts(Array.isArray(lateAlertsData) ? lateAlertsData : [])
       setTokenHistory(tokenHistoryData)
+      setActiveTvSession(activeTvSessionData)
       if (settingsData) {
         setSettings({
           ...settingsData,
@@ -477,6 +553,61 @@ export function AdminPage({ user }) {
   }, [employeeDetail?.uid, employeeDetailMonth])
 
   useEffect(() => {
+    const selected = employeeDetailRows.find((row) => row.date === employeeDetailDateKey) || null
+    setDayCheckInTime(formatTimeOnlyForInput(selected?.checkInAt || ''))
+    setDayCheckOutTime(formatTimeOnlyForInput(selected?.checkOutAt || ''))
+    setMarkAbsent(!selected?.checkInAt)
+  }, [employeeDetailDateKey, employeeDetailRows])
+
+  useEffect(() => {
+    if (!pathname?.startsWith('/admin/employee-history')) return
+    const params = new URLSearchParams(routeSearch || window.location.search)
+    const uid = String(params.get('uid') || '').trim()
+    if (!uid) return
+
+    const month = params.get('month') || getTodayKey().slice(0, 7)
+    const view = params.get('view') || 'month'
+    const candidate = [...employees, ...directory].find((entry) => String(entry.uid || entry.id || entry.userId) === uid)
+
+    if (candidate && candidate.uid !== employeeDetail?.uid) {
+      setEmployeeDetail(candidate)
+    }
+
+    if (!candidate && uid && employeeDetail?.uid !== uid) {
+      setEmployeeDetail({ uid, name: '', email: '' })
+    }
+
+    setEmployeeDetailMonth(month)
+    setEmployeeDetailView(view === 'history' ? 'history' : 'month')
+    setEmployeeDetailDateKey('')
+  }, [pathname, routeSearch, employees, directory, employeeDetail?.uid])
+
+  useEffect(() => {
+    if (!employeeDetail?.uid) {
+      setEmployeeDetailSalaryRows([])
+      return undefined
+    }
+
+    let cancelled = false
+    const loadEmployeeDetailSalary = async () => {
+      try {
+        const rows = await getEmployeeSalaryRecords(employeeDetail.uid, 100)
+        if (!cancelled) {
+          setEmployeeDetailSalaryRows(rows)
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message)
+      }
+    }
+
+    loadEmployeeDetailSalary()
+
+    return () => {
+      cancelled = true
+    }
+  }, [employeeDetail?.uid])
+
+  useEffect(() => {
     if (!logs.length || dateTouched) return
     const hasRowsForDate = logs.some((log) => log.date === date)
     if (hasRowsForDate) return
@@ -553,17 +684,27 @@ export function AdminPage({ user }) {
   // Token filtering and validation
   const filteredTokens = useMemo(() => {
     const keyword = tokenSearch.trim().toLowerCase()
+    const now = Date.now()
     return tokenHistory
       .filter((t) => tokenStatusFilter === 'all' || 
         (tokenStatusFilter === 'active' && t.active) ||
         (tokenStatusFilter === 'expired' && !t.active))
       .filter((t) => {
-        if (!keyword) return true
-        return String(t.token || '').includes(keyword) ||
-          String(t.scansCount || 0).includes(keyword) ||
-          String(t.issuedAt || '').includes(keyword)
+        if (tokenExpiryFilter === 'expiresSoon') {
+          return t.active && Number(t.expiresAtMs || 0) <= now + 5 * 60 * 1000
+        }
+        if (tokenExpiryFilter === 'longerThanHour') {
+          return t.active && Number(t.expiresAtMs || 0) > now + 60 * 60 * 1000
+        }
+        return true
       })
-  }, [tokenHistory, tokenSearch, tokenStatusFilter])
+      .filter((t) => {
+        if (!keyword) return true
+        return String(t.token || '').toLowerCase().includes(keyword) ||
+          String(t.scansCount || 0).includes(keyword) ||
+          String(t.issuedAt || '').toLowerCase().includes(keyword)
+      })
+  }, [tokenHistory, tokenSearch, tokenStatusFilter, tokenExpiryFilter])
 
   // Token validation alerts
   const tokenValidations = useMemo(() => {
@@ -665,6 +806,8 @@ export function AdminPage({ user }) {
 
   const scheduleForSelectedDate = useMemo(() => getScheduleForDate(date, settings), [date, settings])
 
+  const analyticsData = useDashboardAnalytics(logs, employees, salaryRows, dashboardRange, date)
+
   const dashboardSummary = useMemo(() => {
     const todayLogs = logs.filter((item) => item.date === date)
     const checkIns = todayLogs.filter((item) => item.action === 'checkIn')
@@ -685,6 +828,23 @@ export function AdminPage({ user }) {
 
   const logExportRows = useMemo(() => toLogExportRows(filteredLogs), [filteredLogs])
   const activeToken = tokenHistory.find((token) => token.active) || tokenHistory[0] || null
+
+  useEffect(() => {
+    if (!activeToken?.expiresAtMs || !activeToken?.active) {
+      setActiveTokenSecondsLeft(0)
+      return undefined
+    }
+
+    const update = () => {
+      const left = Math.max(0, Math.floor((Number(activeToken.expiresAtMs) - Date.now()) / 1000))
+      setActiveTokenSecondsLeft(left)
+    }
+
+    update()
+    const timer = setInterval(update, 1000)
+    return () => clearInterval(timer)
+  }, [activeToken])
+
   const employeeLookupById = useMemo(() => {
     const map = new Map()
     for (const employee of employees) {
@@ -704,6 +864,7 @@ export function AdminPage({ user }) {
   const directoryRows = useMemo(() => {
     const keyword = employeeSearch.trim().toLowerCase()
     const rows = directory
+      .filter((entry) => entry.active !== false)
       .filter((entry) => (showInactiveEmployees ? true : entry.active !== false))
       .filter((entry) => employeeRoleFilter === 'all' || String(entry.role || 'employee') === employeeRoleFilter)
       .filter((entry) => {
@@ -1022,12 +1183,31 @@ await createEmployeeByAdmin({
     }
   }
 
+  const applyQrRefreshInterval = async () => {
+    setError('')
+    setMessage('')
+    try {
+      setSavingQrInterval(true)
+      const nextInterval = Number(settings.refreshInterval || APP_CONFIG.tokenRefreshSeconds)
+      await saveAdminSettings({ ...settings, refreshInterval: nextInterval })
+      const activeSession = await getActiveTvDisplaySession()
+      if (activeSession) {
+        await createTvDisplaySession(user, nextInterval)
+      }
+      setMessage(`QR refresh interval saved: ${formatRefreshInterval(nextInterval)}.`)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSavingQrInterval(false)
+    }
+  }
+
   const regenerateToken = async () => {
     setError('')
     setMessage('')
     try {
       await issueTvToken(user, Number(settings.refreshInterval || APP_CONFIG.tokenRefreshSeconds))
-      setMessage('New QR token generated.')
+      setMessage(`New QR token generated (${formatRefreshInterval(Number(settings.refreshInterval || APP_CONFIG.tokenRefreshSeconds))}).`)
       // Refresh token history immediately
       const freshHistory = await getTokenHistory()
       setTokenHistory(freshHistory)
@@ -1046,13 +1226,140 @@ await createEmployeeByAdmin({
       )
       try {
         await navigator.clipboard.writeText(session.launchUrl)
-        setMessage('TV display link copied. The owner can bookmark this same link and open it daily without admin login.')
+        setMessage(`TV display link copied (${formatRefreshInterval(Number(settings.refreshInterval || APP_CONFIG.tokenRefreshSeconds))}).`)
       } catch {
         window.prompt('Copy this TV display link:', session.launchUrl)
-        setMessage('TV display link generated. Bookmark this same link on the shop device for one-click opening.')
+        setMessage(`TV display link generated (${formatRefreshInterval(Number(settings.refreshInterval || APP_CONFIG.tokenRefreshSeconds))}).`)
       }
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  const saveEmployeeAttendanceUpdate = async () => {
+    if (!employeeDetail?.uid) {
+      setError('Select an employee first.')
+      return
+    }
+    if (!employeeDetailDateKey) {
+      setError('Select a date to save attendance.')
+      return
+    }
+    setError('')
+    setMessage('')
+    setSavingAttendanceUpdate(true)
+    try {
+      const payload = {}
+      if (markAbsent) {
+        payload.checkInAt = null
+        payload.checkOutAt = null
+        payload.late = false
+        payload.overtimeMinutes = 0
+        payload.workedMinutes = 0
+        payload.overtimePay = 0
+        payload.overtimeLabel = ''
+      } else {
+        const nextCheckIn = buildIsoFromDateAndTime(employeeDetailDateKey, dayCheckInTime)
+        const nextCheckOut = buildIsoFromDateAndTime(employeeDetailDateKey, dayCheckOutTime)
+        if (dayCheckInTime) payload.checkInAt = nextCheckIn
+        else payload.checkInAt = null
+        if (dayCheckOutTime) payload.checkOutAt = nextCheckOut
+        else payload.checkOutAt = null
+        if (!dayCheckInTime && !dayCheckOutTime) {
+          payload.late = false
+          payload.overtimeMinutes = 0
+          payload.workedMinutes = 0
+          payload.overtimePay = 0
+          payload.overtimeLabel = ''
+        }
+      }
+      await updateAttendanceDaily(employeeDetail.uid, employeeDetailDateKey, payload)
+      setMessage('Attendance saved.')
+      const rows = await getEmployeeAttendanceForMonth(employeeDetail.uid, employeeDetailMonth)
+      setEmployeeDetailRows(rows)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSavingAttendanceUpdate(false)
+    }
+  }
+
+  const clearEmployeeAttendanceForDay = () => {
+    setDayCheckInTime('')
+    setDayCheckOutTime('')
+    setMarkAbsent(true)
+  }
+
+  const deleteEmployeeAttendanceForDay = async () => {
+    if (!employeeDetail?.uid || !employeeDetailDateKey) {
+      setError('Select an employee and date first.')
+      return
+    }
+    if (!window.confirm(`Delete attendance for ${employeeDetailDateKey}? This cannot be undone.`)) return
+    setError('')
+    setMessage('')
+    setSavingAttendanceUpdate(true)
+    try {
+      await deleteAttendanceDaily(employeeDetail.uid, employeeDetailDateKey)
+      setMessage('Attendance deleted.')
+      const rows = await getEmployeeAttendanceForMonth(employeeDetail.uid, employeeDetailMonth)
+      setEmployeeDetailRows(rows)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSavingAttendanceUpdate(false)
+    }
+  }
+
+  const bulkUpdateAttendance = async (action) => {
+    if (!employeeDetail?.uid || selectedDays.size === 0) return
+    setError('')
+    setMessage('')
+    setSavingAttendanceUpdate(true)
+    try {
+      const updates = Array.from(selectedDays).map((date) => {
+        if (action === 'absent') {
+          return updateAttendanceDaily(employeeDetail.uid, date, {
+            checkInAt: null,
+            checkOutAt: null,
+            late: false,
+            overtimeMinutes: 0,
+            workedMinutes: 0,
+            overtimePay: 0,
+            overtimeLabel: '',
+          })
+        }
+        return Promise.resolve()
+      })
+      await Promise.all(updates)
+      setMessage(`${selectedDays.size} days updated.`)
+      setSelectedDays(new Set())
+      const rows = await getEmployeeAttendanceForMonth(employeeDetail.uid, employeeDetailMonth)
+      setEmployeeDetailRows(rows)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSavingAttendanceUpdate(false)
+    }
+  }
+
+  const bulkDeleteAttendance = async () => {
+    if (!employeeDetail?.uid || selectedDays.size === 0) return
+    if (!window.confirm(`Delete attendance for ${selectedDays.size} days? This cannot be undone.`)) return
+    setError('')
+    setMessage('')
+    setSavingAttendanceUpdate(true)
+    try {
+      const deletes = Array.from(selectedDays).map((date) => deleteAttendanceDaily(employeeDetail.uid, date))
+      await Promise.all(deletes)
+      setMessage(`${selectedDays.size} days deleted.`)
+      setSelectedDays(new Set())
+      const rows = await getEmployeeAttendanceForMonth(employeeDetail.uid, employeeDetailMonth)
+      setEmployeeDetailRows(rows)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSavingAttendanceUpdate(false)
     }
   }
 
@@ -1272,15 +1579,62 @@ await createEmployeeByAdmin({
 
   const openEmployeeDetail = (employee) => {
     if (!employee) return
+    const uid = String(employee.uid || employee.id || employee.userId || '')
+    if (!uid) return
+
     setEmployeeDetail(employee)
     setEmployeeDetailMonth(salaryMonth || getTodayKey().slice(0, 7))
+    setEmployeeDetailView('month')
     setEmployeeDetailDateKey('')
+    navigate(
+      `/admin/employee-history?uid=${encodeURIComponent(uid)}&month=${encodeURIComponent(salaryMonth || getTodayKey().slice(0, 7))}&view=month`,
+      false,
+    )
   }
 
   const closeEmployeeDetail = () => {
     setEmployeeDetail(null)
     setEmployeeDetailRows([])
     setEmployeeDetailDateKey('')
+    if (pathname?.startsWith('/admin/employee-history')) {
+      navigate('/admin', false)
+    }
+  }
+
+  const exportEmployeeRecords = () => {
+    if (!employeeDetail?.uid) return
+    const attendanceRows = employeeDetailRows.map((row) => ({
+      RecordType: 'Attendance',
+      Employee: employeeDetail.name || employeeDetail.email,
+      UserId: employeeDetail.uid,
+      Date: row.date,
+      CheckIn: row.checkInAt ? formatClock(row.checkInAt) : '',
+      CheckOut: row.checkOutAt ? formatClock(row.checkOutAt) : '',
+      Late: row.late ? 'Yes' : 'No',
+      OvertimeHours: Math.round((Number(row.overtimeMinutes || 0) / 60) * 100) / 100,
+      OvertimePay: Number(row.overtimePay || 0),
+      WorkedMinutes: Number(row.workedMinutes || 0),
+    }))
+    const salaryRows = employeeDetailSalaryRows.map((row) => ({
+      RecordType: 'Salary',
+      Employee: employeeDetail.name || employeeDetail.email,
+      UserId: row.userId,
+      Month: row.month,
+      BaseSalary: Number(row.baseSalary || 0),
+      Deductions: Number(row.deductions || 0),
+      Bonus: Number(row.bonus || 0),
+      FinalSalary: Number(row.finalSalary || 0),
+      DaysPresent: row.daysPresent || 0,
+      LateDays: row.lateDays || 0,
+      OvertimeHours: Number(row.overtimeHours || 0),
+    }))
+    const rows = [...attendanceRows, ...salaryRows]
+    if (!rows.length) {
+      setMessage('No employee records available to export.')
+      return
+    }
+    downloadCsv(`employee-${employeeDetail.uid}-history.csv`, rows)
+    setMessage(`Exported ${rows.length} employee records.`)
   }
 
   const openEmployeeAttendance = () => {
@@ -1643,9 +1997,9 @@ await createEmployeeByAdmin({
             <section className="card admin-top-row">
               <div>
                 <p className="eyebrow">Dashboard Overview</p>
-                <h1>Today - {date}</h1>
+                <h1>Analytics & Insights - {date}</h1>
                 <p className="muted" style={{ margin: '6px 0 0' }}>
-                  Live attendance and payroll insights for the selected range.
+                  Real-time attendance analytics and key performance indicators.
                 </p>
               </div>
               <div className="row gap wrap dashboard-actions">
@@ -1662,14 +2016,33 @@ await createEmployeeByAdmin({
               </div>
             </section>
 
-            <section className="stats-grid six">
-              <article className="card stat-card"><h3>{dashboardSummary.totalRecords}</h3><p>Total Records</p></article>
-              <article className="card stat-card"><h3>{dashboardSummary.todayCheckIns}</h3><p>Today Check-Ins</p></article>
-              <article className="card stat-card danger"><h3>{dashboardSummary.lateArrivals}</h3><p>Late Arrivals</p></article>
-              <article className="card stat-card"><h3>{dashboardSummary.checkedOut}</h3><p>Checked Out</p></article>
-              <article className="card stat-card"><h3>{dashboardSummary.uniqueStaff}</h3><p>Unique Staff</p></article>
-              <article className="card stat-card"><h3>{dashboardSummary.onTimePercent}%</h3><p>On Time %</p></article>
-              <article className="card stat-card ok"><h3>GPS Active</h3><p>Verification Enabled</p></article>
+            {/* KPI Cards */}
+            <section className="kpi-grid">
+              <KpiCard {...analyticsData.kpis.totalEmployees} />
+              <KpiCard {...analyticsData.kpis.attendanceRate} />
+              <KpiCard {...analyticsData.kpis.lateArrivals} />
+              <KpiCard {...analyticsData.kpis.totalPayroll} />
+            </section>
+
+            {/* Charts Grid */}
+            <section className="charts-grid">
+              <div className="chart-card">
+                <AttendanceTrendChart data={analyticsData.attendanceTrend} />
+              </div>
+              <div className="chart-card">
+                <LateArrivalsChart data={analyticsData.lateByTime} />
+              </div>
+              <div className="chart-card">
+                <EmployeeStatusChart data={analyticsData.employeeStatusData} />
+              </div>
+              <div className="chart-card">
+                <SalaryDistributionChart data={analyticsData.salaryData} />
+              </div>
+            </section>
+
+            {/* Payroll Summary Chart */}
+            <section className="card payroll-chart-section">
+              <PayrollSummaryChart data={analyticsData.payrollData} height={350} />
             </section>
 
             <section className="dashboard-grid">
@@ -1750,32 +2123,55 @@ await createEmployeeByAdmin({
 
             <section className="card">
               <h3>Recent Activity</h3>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Name</th><th>Email</th><th>Type</th><th>Status</th><th>Time</th></tr>
-                  </thead>
-                  <tbody>
-                    {dashboardSummary.recent.map((log) => (
-                      <tr key={log.id}>
-                        <td>{log.employeeName}</td>
-                        <td>
-                          <div className="recent-email-cell">
-                            <span>{employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || '-'}</span>
-                            <code className="muted">{log.userId}</code>
-                          </div>
-                        </td>
-                        <td>{log.action === 'checkIn' ? 'Check In' : 'Check Out'}</td>
-                        <td>{log.action === 'checkIn' ? <span className={`pill ${log.late ? 'danger' : 'ok'}`}>{log.late ? 'Late' : 'On Time'}</span> : '-'}</td>
-                        <td>{formatClock(log.clientTs)}</td>
-                      </tr>
-                    ))}
-                    {!dashboardSummary.recent.length && (
-                      <tr><td colSpan={5} className="muted">No activity yet.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              <DataTable
+                data={dashboardSummary.recent || []}
+                columns={[
+                  {
+                    key: 'employeeName',
+                    header: 'Name',
+                    sortable: true,
+                  },
+                  {
+                    key: 'userId',
+                    header: 'Email',
+                    render: (log) => (
+                      <div className="recent-email-cell">
+                        <span>{employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || '-'}</span>
+                        <code className="muted">{log.userId}</code>
+                      </div>
+                    ),
+                    sortable: true,
+                  },
+                  {
+                    key: 'type',
+                    header: 'Type',
+                    render: (log) => (log.action === 'checkIn' ? 'Check In' : 'Check Out'),
+                    sortable: true,
+                  },
+                  {
+                    key: 'status',
+                    header: 'Status',
+                    render: (log) => (
+                      log.action === 'checkIn' ? (
+                        <span className={`pill ${log.late ? 'danger' : 'ok'}`}>
+                          {log.late ? 'Late' : 'On Time'}
+                        </span>
+                      ) : '-'
+                    ),
+                    sortable: true,
+                  },
+                  {
+                    key: 'time',
+                    header: 'Time',
+                    render: (log) => formatClock(log.clientTs),
+                    sortable: true,
+                  },
+                ]}
+                searchable={false}
+                paginated={false}
+                emptyMessage="No activity yet."
+                className="recent-activity-table"
+              />
             </section>
           </>
         )}
@@ -1893,7 +2289,16 @@ await createEmployeeByAdmin({
 
             <section className="card">
               <div className="grid filters wide attendance-filters">
-                <label>Date<input type="date" value={date} onChange={(e) => { setDateTouched(true); setDate(e.target.value) }} /></label>
+                <label>Date
+                  <DatePicker
+                    value={date}
+                    onChange={(newDate) => {
+                      setDateTouched(true)
+                      setDate(newDate)
+                    }}
+                    placeholder="Select date"
+                  />
+                </label>
                 <label>Search<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name / email / id" /></label>
                 <label>Employee
                   <select value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)}>
@@ -1942,136 +2347,110 @@ await createEmployeeByAdmin({
               ) : null}
               {attendanceView === 'logs' ? (
                 <>
-                  <div className="table-wrap admin-table-wrap">
-                    <table className="admin-table">
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Name</th>
-                          <th>Email</th>
-                          <th>Type</th>
-                          <th>Status</th>
-                          <th>Date</th>
-                          <th>Time</th>
-                          {showGpsColumn && <th>GPS</th>}
-                          {showGpsColumn && <th>Map</th>}
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {paginatedLogs.map((log, index) => (
-                          <tr key={log.id || `${log.userId}-${index}`} className="attendance-log-row">
-                            <td>{(attendancePage - 1) * PAGE_SIZE + index + 1}</td>
-                            <td>{log.employeeName}</td>
-                            <td>
-                              <div className="recent-email-cell">
-                                <span>{employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || '-'}</span>
-                                <code className="muted">{log.userId}</code>
-                              </div>
-                            </td>
-                            <td><span className="pill neutral">{log.action === 'checkIn' ? 'Check In' : 'Check Out'}</span></td>
-                            <td>{log.action === 'checkIn' ? <span className={`pill ${log.late ? 'danger' : 'ok'}`}>{log.late ? 'Late' : 'On Time'}</span> : '-'}</td>
-                            <td>{log.date}</td>
-                            <td>
-                              <div className="row gap wrap">
-                                <span>{formatClock(log.clientTs)}</span>
-                                <span className="muted" style={{ fontSize: '0.82rem' }}>{formatRelative(log.clientTs)}</span>
-                              </div>
-                            </td>
-                            {showGpsColumn && (
-                              <td>
-                                <span className="gps-coord">
-                                  {log.gps ? `${log.gps.lat?.toFixed(4)},${log.gps.lng?.toFixed(4)}` : '-'}
-                                </span>
-                              </td>
-                            )}
-                            {showGpsColumn && (
-                              <td>
-                                {log.gps?.lat && log.gps?.lng ? (
-                                  <a
-                                    className="ghost btn-sm"
-                                    href={`https://www.google.com/maps?q=${encodeURIComponent(`${log.gps.lat},${log.gps.lng}`)}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    Open
-                                  </a>
-                                ) : (
-                                  <span className="muted">-</span>
-                                )}
-                              </td>
-                            )}
-                            <td>
-                              <div className="row gap wrap attendance-row-actions">
-                                <button
-                                  type="button"
-                                  className="ghost btn-sm"
-                                  onClick={() => openEmployeeDetail(employeeLookupById.get(String(log.userId)) || {
-                                    uid: log.userId,
-                                    name: log.employeeName,
-                                    email: employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || '',
-                                  })}
-                                >
-                                  Detail
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ghost btn-sm"
-                                  onClick={async () => {
-                                    const email = employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || ''
-                                    try {
-                                      await navigator.clipboard.writeText(email || String(log.userId || ''))
-                                      setMessage(email ? 'Employee email copied.' : 'Employee id copied.')
-                                    } catch {
-                                      setError('Clipboard copy not available in this browser.')
-                                    }
-                                  }}
-                                >
-                                  Copy
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                        {!paginatedLogs.length && (
-                          <tr><td colSpan={showGpsColumn ? 10 : 8} className="muted">No records found.</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="attendance-log-cards">
-                    {paginatedLogs.map((log, index) => {
-                      const email = employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || '-'
-                      return (
-                        <article key={`card-${log.id || `${log.userId}-${index}`}`} className="card attendance-log-card">
-                          <div className="attendance-log-card-head">
-                            <div>
-                              <p className="eyebrow" style={{ marginBottom: 6 }}>#{(attendancePage - 1) * PAGE_SIZE + index + 1}</p>
-                              <h3 style={{ marginBottom: 4 }}>{log.employeeName}</h3>
-                              <div className="recent-email-cell">
-                                <span>{email}</span>
-                                <code className="muted">{log.userId}</code>
-                              </div>
-                            </div>
-                            <div className="attendance-log-card-meta">
-                              <span className="pill neutral">{log.action === 'checkIn' ? 'Check In' : 'Check Out'}</span>
-                              {log.action === 'checkIn' ? <span className={`pill ${log.late ? 'danger' : 'ok'}`}>{log.late ? 'Late' : 'On Time'}</span> : null}
-                            </div>
+                  <DataTable
+                    data={paginatedLogs}
+                    columns={[
+                      {
+                        key: 'index',
+                        header: '#',
+                        render: (_, index) => (attendancePage - 1) * PAGE_SIZE + index + 1,
+                        sortable: false
+                      },
+                      {
+                        key: 'employeeName',
+                        header: 'Name',
+                        sortable: true
+                      },
+                      {
+                        key: 'userId',
+                        header: 'Email/ID',
+                        render: (log) => (
+                          <div className="recent-email-cell">
+                            <span>{employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || '-'}</span>
+                            <code className="muted">{log.userId}</code>
                           </div>
-                          <div className="attendance-log-card-grid">
-                            <div><span>Date</span><strong>{log.date}</strong></div>
-                            <div><span>Time</span><strong>{formatClock(log.clientTs)}</strong><small>{formatRelative(log.clientTs)}</small></div>
-                            <div><span>GPS</span><strong>{log.gps ? `${log.gps.lat?.toFixed(4)}, ${log.gps.lng?.toFixed(4)}` : '-'}</strong></div>
-                            <div><span>Map</span><strong>{log.gps?.lat && log.gps?.lng ? 'Available' : '-'}</strong></div>
+                        ),
+                        sortable: true
+                      },
+                      {
+                        key: 'action',
+                        header: 'Type',
+                        render: (log) => (
+                          <span className="pill neutral">{log.action === 'checkIn' ? 'Check In' : 'Check Out'}</span>
+                        ),
+                        sortable: true
+                      },
+                      {
+                        key: 'status',
+                        header: 'Status',
+                        render: (log) => (
+                          log.action === 'checkIn' ? (
+                            <StatusBadge status={log.late ? 'late' : 'on-time'} />
+                          ) : (
+                            <span className="muted">-</span>
+                          )
+                        ),
+                        sortable: true
+                      },
+                      {
+                        key: 'date',
+                        header: 'Date',
+                        sortable: true
+                      },
+                      {
+                        key: 'time',
+                        header: 'Time',
+                        render: (log) => (
+                          <div className="row gap wrap">
+                            <span>{formatClock(log.clientTs)}</span>
+                            <span className="muted" style={{ fontSize: '0.82rem' }}>{formatRelative(log.clientTs)}</span>
                           </div>
-                          <div className="row gap wrap attendance-row-actions attendance-log-card-actions">
+                        ),
+                        sortable: false
+                      },
+                      ...(showGpsColumn ? [
+                        {
+                          key: 'gps',
+                          header: 'GPS',
+                          render: (log) => (
+                            <span className="gps-coord">
+                              {log.gps ? `${log.gps.lat?.toFixed(4)},${log.gps.lng?.toFixed(4)}` : '-'}
+                            </span>
+                          ),
+                          sortable: false
+                        },
+                        {
+                          key: 'map',
+                          header: 'Map',
+                          render: (log) => (
+                            log.gps?.lat && log.gps?.lng ? (
+                              <a
+                                className="ghost btn-sm"
+                                href={`https://www.google.com/maps?q=${encodeURIComponent(`${log.gps.lat},${log.gps.lng}`)}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open
+                              </a>
+                            ) : (
+                              <span className="muted">-</span>
+                            )
+                          ),
+                          sortable: false
+                        }
+                      ] : []),
+                      {
+                        key: 'actions',
+                        header: 'Actions',
+                        render: (log) => (
+                          <div className="row gap wrap attendance-row-actions">
                             <button
                               type="button"
                               className="ghost btn-sm"
                               onClick={() => openEmployeeDetail(employeeLookupById.get(String(log.userId)) || {
                                 uid: log.userId,
                                 name: log.employeeName,
-                                email,
+                                email: employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || '',
                               })}
                             >
                               Detail
@@ -2080,6 +2459,7 @@ await createEmployeeByAdmin({
                               type="button"
                               className="ghost btn-sm"
                               onClick={async () => {
+                                const email = employeeLookupById.get(String(log.userId))?.email || log.employeeEmail || ''
                                 try {
                                   await navigator.clipboard.writeText(email || String(log.userId || ''))
                                   setMessage(email ? 'Employee email copied.' : 'Employee id copied.')
@@ -2090,21 +2470,16 @@ await createEmployeeByAdmin({
                             >
                               Copy
                             </button>
-                            {log.gps?.lat && log.gps?.lng ? (
-                              <a
-                                className="ghost btn-sm"
-                                href={`https://www.google.com/maps?q=${encodeURIComponent(`${log.gps.lat},${log.gps.lng}`)}`}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Open map
-                              </a>
-                            ) : null}
                           </div>
-                        </article>
-                      )
-                    })}
-                  </div>
+                        ),
+                        sortable: false
+                      }
+                    ]}
+                    searchable={true}
+                    paginated={false} // Using existing pagination
+                    emptyMessage="No attendance records found."
+                    className="attendance-logs-table"
+                  />
                   <div className="row between table-footer">
                     <p className="muted">{filteredLogs.length} record{filteredLogs.length === 1 ? '' : 's'}</p>
                     <div className="row gap">
@@ -2116,71 +2491,101 @@ await createEmployeeByAdmin({
                 </>
               ) : (
                 <>
-                  <div className="table-wrap admin-table-wrap">
-                    <table className="admin-table">
-                      <thead>
-                        <tr>
-                          <th>Name</th>
-                          <th>ID</th>
-                          <th>Status</th>
-                          <th>Check In</th>
-                          <th>Check Out</th>
-                          <th>Worked</th>
-                          <th>OT</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredDirectoryForAttendance.map((item) => {
+                  <DataTable
+                    data={filteredDirectoryForAttendance}
+                    columns={[
+                      {
+                        key: 'name',
+                        header: 'Name',
+                        render: (item) => item.name || item.email,
+                        sortable: true
+                      },
+                      {
+                        key: 'id',
+                        header: 'ID',
+                        render: (item) => (
+                          <div className="recent-email-cell">
+                            <span>{item.email || '-'}</span>
+                            <code className="muted">{item.uid}</code>
+                          </div>
+                        ),
+                        sortable: true
+                      },
+                      {
+                        key: 'status',
+                        header: 'Status',
+                        render: (item) => (
+                          <StatusBadge status={item.late ? 'late' : 'on-time'} />
+                        ),
+                        sortable: true
+                      },
+                      {
+                        key: 'checkIn',
+                        header: 'Check In',
+                        render: (item) => formatClock(item.checkInAt),
+                        sortable: true
+                      },
+                      {
+                        key: 'checkOut',
+                        header: 'Check Out',
+                        render: (item) => formatClock(item.checkOutAt),
+                        sortable: true
+                      },
+                      {
+                        key: 'worked',
+                        header: 'Worked',
+                        render: (item) => {
                           const inMs = item.checkInAt ? new Date(item.checkInAt).getTime() : NaN
                           const outMs = item.checkOutAt ? new Date(item.checkOutAt).getTime() : NaN
                           const worked = Number.isFinite(inMs) && Number.isFinite(outMs) ? outMs - inMs : NaN
-                          return (
-                            <tr key={item.uid || item.email || item.name} className="attendance-summary-row">
-                              <td>{item.name || item.email}</td>
-                              <td>
-                                <div className="recent-email-cell">
-                                  <span>{item.email || '-'}</span>
-                                  <code className="muted">{item.uid}</code>
-                                </div>
-                              </td>
-                              <td><span className={`pill ${item.late ? 'danger' : 'neutral'}`}>{item.status}</span></td>
-                              <td>{formatClock(item.checkInAt)}</td>
-                              <td>{formatClock(item.checkOutAt)}</td>
-                              <td>{formatDurationMs(worked)}</td>
-                              <td>{Number(item.overtimeMinutes || 0) > 0 ? <span className="pill ok">{Math.round((Number(item.overtimeMinutes || 0) / 60) * 100) / 100}h OT</span> : <span className="muted">-</span>}</td>
-                              <td>
-                                <div className="row gap wrap attendance-row-actions">
-                                  <button
-                                    type="button"
-                                    className="ghost btn-sm"
-                                    onClick={() => openEmployeeDetail(item)}
-                                  >
-                                    Detail
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="ghost btn-sm"
-                                    onClick={() => {
-                                      setSelectedEmployee(item.uid)
-                                      setAttendanceView('logs')
-                                      setStatusFilter(item.late ? 'late' : 'all')
-                                      setAttendancePage(1)
-                                    }}
-                                  >
-                                    Logs
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                        {!filteredDirectoryForAttendance.length && (
-                          <tr><td colSpan={8} className="muted">No employees found for this date.</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                          return formatDurationMs(worked)
+                        },
+                        sortable: false
+                      },
+                      {
+                        key: 'ot',
+                        header: 'OT',
+                        render: (item) => Number(item.overtimeMinutes || 0) > 0 ? (
+                          <span className="pill ok">{Math.round((Number(item.overtimeMinutes || 0) / 60) * 100) / 100}h OT</span>
+                        ) : (
+                          <span className="muted">-</span>
+                        ),
+                        sortable: true
+                      },
+                      {
+                        key: 'actions',
+                        header: 'Action',
+                        render: (item) => (
+                          <div className="row gap wrap attendance-row-actions">
+                            <button
+                              type="button"
+                              className="ghost btn-sm"
+                              onClick={() => openEmployeeDetail(item)}
+                            >
+                              Detail
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost btn-sm"
+                              onClick={() => {
+                                setSelectedEmployee(item.uid)
+                                setAttendanceView('logs')
+                                setStatusFilter(item.late ? 'late' : 'all')
+                                setAttendancePage(1)
+                              }}
+                            >
+                              Logs
+                            </button>
+                          </div>
+                        ),
+                        sortable: false
+                      }
+                    ]}
+                    searchable={true}
+                    paginated={false}
+                    emptyMessage="No employees found for this date."
+                    className="attendance-summary-table"
+                  />
                   <div className="row between table-footer">
                     <p className="muted">
                       {filteredDirectoryForAttendance.length} employee{filteredDirectoryForAttendance.length === 1 ? '' : 's'} •
@@ -2293,7 +2698,8 @@ await createEmployeeByAdmin({
                 <span className="pill ok">On time</span>
                 <span className="pill danger">Late</span>
                 <span className="pill neutral">Checked out</span>
-                <span className="pill neutral">Inactive hidden</span>
+                <span className="pill neutral">Pending approvals: {pendingApprovalRows.length}</span>
+                <span className="pill neutral">{showInactiveEmployees ? 'Inactive visible' : 'Inactive hidden'}</span>
               </div>
             </section>
 
@@ -2376,7 +2782,7 @@ await createEmployeeByAdmin({
                       </div>
                       <div className="emp-meta">
                         <span className="muted">{item.roleName ? `Payroll role: ${item.roleName}` : 'Payroll role: None'}</span>
-                        <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} • Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
+                        <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} | Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
                       </div>
                       <div className="emp-card-actions">
                         <button type="button" onClick={() => approveEmployee(item)} disabled={savingEmployee}>Approve</button>
@@ -2404,14 +2810,11 @@ await createEmployeeByAdmin({
                     <span className="muted">{item.roleName ? `Payroll role: ${item.roleName}` : 'Payroll role: None'}</span>
                     <span className="muted">{item.checkInAt ? `In ${formatClock(item.checkInAt)}` : 'No check-in yet'}</span>
                     <span className="muted">{item.checkOutAt ? `Out ${formatClock(item.checkOutAt)}` : 'No check-out yet'}</span>
-                    <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} • Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
+                    <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} | Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
                   </div>
                   <div className="emp-card-actions">
                     <button type="button" className="ghost" onClick={() => openEmployeeDetail(item)}>View detail</button>
                     <button type="button" className="ghost" onClick={() => startEditEmployee(item)}>Edit</button>
-                    {item.active === false ? (
-                      <button type="button" onClick={() => approveEmployee(item)} disabled={savingEmployee}>Approve</button>
-                    ) : null}
                     <button 
                       type="button" 
                       className="ghost" 
@@ -2426,7 +2829,7 @@ await createEmployeeByAdmin({
                       }}
                       title="Copy employee invite link"
                     >
-                      📧 Invite
+                      Invite
                     </button>
                     <button type="button" className="ghost danger" onClick={() => removeEmployee(item)}>Remove</button>
                   </div>
@@ -2519,49 +2922,57 @@ await createEmployeeByAdmin({
 
             <section className="card">
               <h3>Existing Roles</h3>
-              <div className="table-wrap admin-table-wrap">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>Role Name</th>
-                      <th>Pay Type</th>
-                      <th>Rate</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {roles.map((role) => (
-                      <tr key={role.id || role.roleName}>
-                        <td>{role.roleName}</td>
-                        <td>{role.payType}</td>
-                        <td>{Number(role.rate || 0).toLocaleString()}</td>
-                        <td>
-                          <button className="ghost btn-sm" onClick={() => {
-                            setEditingRoleId(role.id)
-                            setNewRoleName(role.roleName)
-                            setNewRolePayType(role.payType)
-                            setNewRoleRate(String(role.rate))
-                          }}>Edit</button>
-                          <button className="ghost btn-sm danger" onClick={async () => {
-                            if (window.confirm('Delete this role?')) {
-                              try {
-                                await deleteRole(role.id)
-                                setMessage('Role deleted.')
-                                await loadRoles()
-                              } catch (err) {
-                                setError(err.message)
-                              }
+              <DataTable
+                data={roles}
+                columns={[
+                  {
+                    key: 'roleName',
+                    header: 'Role Name',
+                    sortable: true
+                  },
+                  {
+                    key: 'payType',
+                    header: 'Pay Type',
+                    sortable: true
+                  },
+                  {
+                    key: 'rate',
+                    header: 'Rate',
+                    render: (role) => Number(role.rate || 0).toLocaleString(),
+                    sortable: true
+                  },
+                  {
+                    key: 'actions',
+                    header: 'Actions',
+                    render: (role) => (
+                      <div className="row gap wrap">
+                        <button className="ghost btn-sm" onClick={() => {
+                          setEditingRoleId(role.id)
+                          setNewRoleName(role.roleName)
+                          setNewRolePayType(role.payType)
+                          setNewRoleRate(String(role.rate))
+                        }}>Edit</button>
+                        <button className="ghost btn-sm danger" onClick={async () => {
+                          if (window.confirm('Delete this role?')) {
+                            try {
+                              await deleteRole(role.id)
+                              setMessage('Role deleted.')
+                              await loadRoles()
+                            } catch (err) {
+                              setError(err.message)
                             }
-                          }}>Delete</button>
-                        </td>
-                      </tr>
-                    ))}
-                    {!roles.length && (
-                      <tr><td colSpan={4} className="muted">No roles defined yet.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                          }
+                        }}>Delete</button>
+                      </div>
+                    ),
+                    sortable: false
+                  }
+                ]}
+                searchable={true}
+                paginated={false}
+                emptyMessage="No roles defined yet."
+                className="roles-table"
+              />
             </section>
           </>
         )}
@@ -2600,7 +3011,11 @@ await createEmployeeByAdmin({
                 {salaryView === 'daily' && (
                   <label style={{ minWidth: 190 }}>
                     <span className="muted" style={{ display: 'block', marginBottom: 6 }}>Date</span>
-                    <input type="date" value={dailySalaryDate} onChange={(e) => setDailySalaryDate(e.target.value)} />
+                    <DatePicker
+                      value={dailySalaryDate}
+                      onChange={setDailySalaryDate}
+                      placeholder="Select date"
+                    />
                   </label>
                 )}
                 <button type="button" onClick={generateSalary} disabled={salaryGenerating}>
@@ -2674,80 +3089,145 @@ await createEmployeeByAdmin({
               </div>
 
               <div className="table-wrap admin-table-wrap">
-{salaryView === 'monthly' ? (
-                  <table className="admin-table">
-                    <thead>
-                      <tr>
-                        <th>Employee</th>
-                        <th>UID</th>
-                        <th>Rate</th>
-                        <th>Present</th>
-                        <th>Late</th>
-                        <th>Manual Days</th>
-                        <th>OT Hrs</th>
-                        <th>OT Pay</th>
-                        <th>Base</th>
-                        <th>Deductions</th>
-                        <th>Bonus</th>
-                        <th>Final</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredSalaryRows.map((row) => (
-                        <tr
-                          key={row.id || `${row.userId}_${row.month}`}
-                          onClick={() => setSalarySelectedUserId(row.userId)}
-                          style={{ cursor: 'pointer' }}
-                          title="Click to view details"
-                        >
-                          <td>{row.employeeName}</td>
-                          <td><code>{row.userId}</code></td>
-                          <td>{Number(row.dailyRate || 0).toLocaleString()}</td>
-                          <td>{row.daysPresent}</td>
-                          <td>{row.lateDays}</td>
-                          <td>{row.manualCount}</td>
-                          <td>{Number(row.overtimeHours || 0).toLocaleString()}</td>
-                          <td>{Number(row.overtimePay || 0).toLocaleString()}</td>
-                          <td>{Number(row.baseSalary || 0).toLocaleString()}</td>
-                          <td>{Number(row.deductions || 0).toLocaleString()}</td>
-                          <td>{Number(row.bonus || 0).toLocaleString()}</td>
-                          <td><strong>{Number(row.finalSalary || 0).toLocaleString()}</strong></td>
-                        </tr>
-                      ))}
-                      {!filteredSalaryRows.length && (
-                        <tr><td colSpan={12} className="muted">No salary records yet. Click “Regenerate Month”.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
+                {salaryView === 'monthly' ? (
+                  <DataTable
+                    data={filteredSalaryRows}
+                    columns={[
+                      {
+                        key: 'employeeName',
+                        header: 'Employee',
+                        sortable: true
+                      },
+                      {
+                        key: 'userId',
+                        header: 'UID',
+                        render: (row) => <code>{row.userId}</code>,
+                        sortable: true
+                      },
+                      {
+                        key: 'dailyRate',
+                        header: 'Rate',
+                        render: (row) => Number(row.dailyRate || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'daysPresent',
+                        header: 'Present',
+                        sortable: true
+                      },
+                      {
+                        key: 'lateDays',
+                        header: 'Late',
+                        sortable: true
+                      },
+                      {
+                        key: 'manualCount',
+                        header: 'Manual Days',
+                        sortable: true
+                      },
+                      {
+                        key: 'overtimeHours',
+                        header: 'OT Hrs',
+                        render: (row) => Number(row.overtimeHours || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'overtimePay',
+                        header: 'OT Pay',
+                        render: (row) => Number(row.overtimePay || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'baseSalary',
+                        header: 'Base',
+                        render: (row) => Number(row.baseSalary || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'deductions',
+                        header: 'Deductions',
+                        render: (row) => Number(row.deductions || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'bonus',
+                        header: 'Bonus',
+                        render: (row) => Number(row.bonus || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'finalSalary',
+                        header: 'Final',
+                        render: (row) => <strong>{Number(row.finalSalary || 0).toLocaleString()}</strong>,
+                        sortable: true
+                      }
+                    ]}
+                    onRowClick={(row) => setSalarySelectedUserId(row.userId)}
+                    searchable={false}
+                    paginated={false}
+                    emptyMessage="No salary records yet. Click ’Regenerate Month’."
+                    className="salary-table"
+                  />
                 ) : (
-                  <table className="admin-table">
-                    <thead>
-                        <tr>
-                          <th>Date</th>
-                          <th>Employee</th>
-                          <th>UID</th>
-                          <th>Daily Salary</th>
-                          <th>OT Hrs</th>
-                          <th>OT Pay</th>
-                          <th>Deductions</th>
-                          <th>Net Pay</th>
-                          <th>Notes</th>
-                          <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredDailyPayments.map((row) => (
-                        <tr key={row.id || `${row.userId}_${row.date}`}>
-                          <td>{row.date}</td>
-                          <td>{row.employeeName}</td>
-                          <td><code>{row.userId}</code></td>
-                          <td>{Number(row.dailySalary || 0).toLocaleString()}</td>
-                          <td>{Number(row.overtimeHours || 0).toLocaleString()}</td>
-                          <td>{Number(row.overtimePay || 0).toLocaleString()}</td>
-                          <td>{Number(row.totalDeductions || 0).toLocaleString()}</td>
-                          <td><strong>{Number(row.netPay || 0).toLocaleString()}</strong></td>
-                          <td>{row.notes}</td>
-                          <td>
+                  <DataTable
+                    data={filteredDailyPayments}
+                    columns={[
+                      {
+                        key: 'date',
+                        header: 'Date',
+                        sortable: true
+                      },
+                      {
+                        key: 'employeeName',
+                        header: 'Employee',
+                        sortable: true
+                      },
+                      {
+                        key: 'userId',
+                        header: 'UID',
+                        render: (row) => <code>{row.userId}</code>,
+                        sortable: true
+                      },
+                      {
+                        key: 'dailySalary',
+                        header: 'Daily Salary',
+                        render: (row) => Number(row.dailySalary || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'overtimeHours',
+                        header: 'OT Hrs',
+                        render: (row) => Number(row.overtimeHours || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'overtimePay',
+                        header: 'OT Pay',
+                        render: (row) => Number(row.overtimePay || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'totalDeductions',
+                        header: 'Deductions',
+                        render: (row) => Number(row.totalDeductions || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'netPay',
+                        header: 'Net Pay',
+                        render: (row) => <strong>{Number(row.netPay || 0).toLocaleString()}</strong>,
+                        sortable: true
+                      },
+                      {
+                        key: 'notes',
+                        header: 'Notes',
+                        sortable: false
+                      },
+                      {
+                        key: 'actions',
+                        header: 'Actions',
+                        render: (row) => (
+                          <div className="row gap wrap">
                             <button className="ghost btn-sm" onClick={() => openDailyPaymentModal(row)}>Edit</button>
                             <button className="ghost btn-sm danger" onClick={async () => {
                               if (window.confirm('Delete this daily payment?')) {
@@ -2756,14 +3236,16 @@ await createEmployeeByAdmin({
                                 setMessage('Daily payment deleted.')
                               }
                             }}>Delete</button>
-                          </td>
-                        </tr>
-                      ))}
-                      {!filteredDailyPayments.length && (
-                        <tr><td colSpan={10} className="muted">No daily payments. Click “Add Daily Payment”.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
+                          </div>
+                        ),
+                        sortable: false
+                      }
+                    ]}
+                    searchable={false}
+                    paginated={false}
+                    emptyMessage="No daily payments. Click ’Add Daily Payment’."
+                    className="daily-payments-table"
+                  />
                 )}
               </div>
             </section>
@@ -3058,7 +3540,14 @@ await createEmployeeByAdmin({
                   <div className="row between wrap" style={{ gap: 16 }}>
                     <div>
                       <h3 style={{ marginBottom: 4 }}>QR Refresh Interval</h3>
-                      <p className="muted" style={{ margin: 0 }}>Tokens now refresh no faster than once per minute.</p>
+                      <p className="muted" style={{ margin: 0 }}>
+                        Refresh interval: <strong title="How often the QR code expires and regenerates for security">{formatRefreshInterval(Number(settings.refreshInterval))}</strong>
+                      </p>
+                      {activeTvSession ? (
+                        <p className="muted" style={{ margin: '6px 0 0' }}>
+                          TV session active • interval {formatRefreshInterval(activeTvSession.refreshInterval)}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="row gap wrap">
                       {QR_REFRESH_OPTIONS.map((interval) => (
@@ -3073,6 +3562,20 @@ await createEmployeeByAdmin({
                         </button>
                       ))}
                     </div>
+                    <div className="row gap" style={{ marginTop: 12, alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={savingQrInterval}
+                        onClick={applyQrRefreshInterval}
+                        style={{ minWidth: 160 }}
+                      >
+                        {savingQrInterval ? 'Saving...' : 'Save QR Interval'}
+                      </button>
+                      <span className="muted">
+                        Saves the selected interval and updates the current TV display session if one exists.
+                      </span>
+                    </div>
                   </div>
                 </section>
 
@@ -3082,14 +3585,22 @@ await createEmployeeByAdmin({
                     <div className="row between wrap">
                       <div>
                         <h3 style={{marginBottom: '4px'}}>Active Token</h3>
-                        <span className={`pill ${activeToken?.active ? 'ok' : 'warning'}`}>
-                          {activeToken?.active 
-                            ? `Active • ${Math.max(0, Math.floor((activeToken.expiresAtMs - Date.now()) / 1000 / 60))}m remaining`
-                            : 'No active token'}
-                        </span>
+                        <div className="row gap wrap" style={{ alignItems: 'center' }}>
+                          <span className={`pill ${activeToken?.active ? 'ok' : 'warning'}`}>
+                            {activeToken?.active ? 'Active' : 'No active token'}
+                          </span>
+                          {activeToken?.active ? (
+                            <span className="muted">Expires in {formatSeconds(activeTokenSecondsLeft)}</span>
+                          ) : null}
+                        </div>
+                        {activeToken?.active ? (
+                          <p className="muted" style={{ margin: '6px 0 0' }}>
+                            Expires at {formatClock(activeToken.expiresAt)} • Source: {formatTokenSource(activeToken)}
+                          </p>
+                        ) : null}
                       </div>
                       <div style={{fontFamily: 'monospace', fontSize: '14px'}}>
-                        Scans Today: {tokenHistory.filter(t => t.scansCount > 0).length}
+                        Scans Active: {tokenHistory.filter((t) => t.active && t.scansCount > 0).reduce((sum, t) => sum + (t.scansCount || 0), 0)}
                       </div>
                     </div>
                     {activeToken?.token ? (
@@ -3101,19 +3612,36 @@ await createEmployeeByAdmin({
                           style={{maxWidth: '280px', borderRadius: '16px'}}
                         />
                         <div style={{marginTop: '16px'}}>
-                          <code style={{fontSize: '20px', letterSpacing: '2px', background: 'var(--paper2)', padding: '12px 20px', borderRadius: '8px', display: 'inline-block'}}>
+                          <code
+                            title={activeToken.token}
+                            style={{fontSize: '20px', letterSpacing: '2px', background: 'var(--paper2)', padding: '12px 20px', borderRadius: '8px', display: 'inline-block', cursor: 'help'}}
+                          >
                             {activeToken.token}
                           </code>
                         </div>
                         <div className="row gap" style={{justifyContent: 'center', marginTop: '16px'}}>
-                          <button className="ghost" onClick={copyToken}>Copy</button>
+                          <button className="ghost" onClick={copyToken}>Copy Token</button>
                           <button className="ghost" onClick={() => {
                             const a = document.createElement('a')
                             a.href = buildQrUrl(activeToken.token)
                             a.download = `scantrack-qr-${activeToken.token}.png`
                             a.click()
                           }}>Download PNG</button>
+                          <button className="ghost" onClick={() => {
+                            const url = `${window.location.origin}/employee?t=${activeToken.token}`
+                            navigator.clipboard.writeText(url).then(() => setMessage('Token URL copied to clipboard.')).catch(() => setError('Clipboard copy not available.'))
+                          }}>Copy URL</button>
                         </div>
+                        {activeTvSession?.launchUrl ? (
+                          <div className="row gap" style={{ justifyContent: 'center', marginTop: '12px' }}>
+                            <button className="ghost" onClick={() => window.open(activeTvSession.launchUrl, '_blank')}>
+                              Preview TV Screen
+                            </button>
+                            <button className="ghost" onClick={launchTvDisplay}>
+                              Refresh TV Session
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <div style={{padding: '60px 20px', textAlign: 'center'}}>
@@ -3144,51 +3672,84 @@ await createEmployeeByAdmin({
                         <option value="expired">Expired</option>
                       </select>
                     </label>
+                    <label>
+                      <strong>Expiry</strong>
+                      <select value={tokenExpiryFilter} onChange={(e) => setTokenExpiryFilter(e.target.value)}>
+                        <option value="all">All</option>
+                        <option value="expiresSoon">Expiring soon</option>
+                        <option value="longerThanHour">Active &gt;1h</option>
+                      </select>
+                    </label>
                   </div>
                 </section>
 
                 {/* Token History Table */}
                 <section className="card">
                   <h3>Token History <span className="muted" style={{fontSize: '14px'}}>({filteredTokens.length})</span></h3>
-                  <div className="table-wrap">
-                    <table className="admin-table">
-                      <thead>
-                        <tr>
-                          <th style={{width: '160px'}}>Token ID</th>
-                          <th>Status</th>
-                          <th>Scans</th>
-                          <th>Issued</th>
-                          <th>Expires</th>
-                          <th style={{width: '120px'}}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredTokens.map((token, idx) => (
-                          <tr key={token.id || idx}>
-                            <td><code>{token.token.slice(0,12)}...</code></td>
-                            <td>
-                              <span className={`pill ${token.active ? 'ok' : 'danger'}`}>
-                                {token.active ? 'Active' : 'Expired'}
-                              </span>
-                            </td>
-                            <td><strong>{token.scansCount || 0}</strong></td>
-                            <td>{formatClock(token.issuedAt)}</td>
-                            <td>{formatRelative(token.expiresAt)}</td>
-                            <td>
-                              <div className="row gap">
-                                <button className="ghost btn-sm" onClick={() => handleCopyToken(token.token)}>Copy</button>
-                                {token.active ? (
-                                  <button className="ghost btn-sm warning" onClick={() => handleRevokeToken(token.token)}>Revoke</button>
-                                ) : (
-                                  <button className="ghost btn-sm danger" onClick={() => handleDeleteToken(token.token)}>Delete</button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <DataTable
+                    data={filteredTokens}
+                    columns={[
+                      {
+                        key: 'token',
+                        header: 'Token ID',
+                        render: (token) => <code title={token.token}>{token.token.slice(0, 12)}...</code>,
+                        sortable: true,
+                      },
+                      {
+                        key: 'status',
+                        header: 'Status',
+                        render: (token) => (
+                          <span className={`pill ${token.active ? 'ok' : 'danger'}`}>
+                            {token.active ? 'Active' : 'Expired'}
+                          </span>
+                        ),
+                        sortable: true,
+                      },
+                      {
+                        key: 'source',
+                        header: 'Source',
+                        render: (token) => formatTokenSource(token),
+                        sortable: true,
+                      },
+                      {
+                        key: 'scansCount',
+                        header: 'Scans',
+                        render: (token) => <strong>{token.scansCount || 0}</strong>,
+                        sortable: true,
+                      },
+                      {
+                        key: 'issuedAt',
+                        header: 'Issued',
+                        render: (token) => formatClock(token.issuedAt),
+                        sortable: true,
+                      },
+                      {
+                        key: 'expiresAt',
+                        header: 'Expires',
+                        render: (token) => formatRelative(token.expiresAt),
+                        sortable: true,
+                      },
+                      {
+                        key: 'actions',
+                        header: 'Actions',
+                        render: (token) => (
+                          <div className="row gap">
+                            <button className="ghost btn-sm" onClick={() => handleCopyToken(token.token)}>Copy</button>
+                            {token.active ? (
+                              <button className="ghost btn-sm warning" onClick={() => handleRevokeToken(token.token)}>Revoke</button>
+                            ) : (
+                              <button className="ghost btn-sm danger" onClick={() => handleDeleteToken(token.token)}>Delete</button>
+                            )}
+                          </div>
+                        ),
+                        sortable: false,
+                      },
+                    ]}
+                    searchable={false}
+                    paginated={false}
+                    emptyMessage="No tokens found. Generate one to begin."
+                    className="token-history-table"
+                  />
                 </section>
 
                 {/* Validation Alerts */}
@@ -3226,18 +3787,18 @@ await createEmployeeByAdmin({
                     <div className="row gap wrap">
                       <label>
                         <span className="muted">From</span>
-                        <input 
-                          type="date" 
-                          value={attendanceRangeStart} 
-                          onChange={(e) => setAttendanceRangeStart(e.target.value)} 
+                        <DatePicker
+                          value={attendanceRangeStart}
+                          onChange={setAttendanceRangeStart}
+                          placeholder="Start date"
                         />
                       </label>
                       <label>
                         <span className="muted">To</span>
-                        <input 
-                          type="date" 
-                          value={attendanceRangeEnd} 
-                          onChange={(e) => setAttendanceRangeEnd(e.target.value)} 
+                        <DatePicker
+                          value={attendanceRangeEnd}
+                          onChange={setAttendanceRangeEnd}
+                          placeholder="End date"
                         />
                       </label>
                       <button 
@@ -3346,7 +3907,16 @@ await createEmployeeByAdmin({
 
             <section className="card alerts-toolbar">
               <div className="grid filters wide">
-                <label>Date<input type="date" value={date} onChange={(e) => { setDateTouched(true); setDate(e.target.value) }} /></label>
+                <label>Date
+                  <DatePicker
+                    value={date}
+                    onChange={(newDate) => {
+                      setDateTouched(true)
+                      setDate(newDate)
+                    }}
+                    placeholder="Select date"
+                  />
+                </label>
                 <label>Search<input value={alertsSearch} onChange={(e) => setAlertsSearch(e.target.value)} placeholder="Search name / id / token" /></label>
                 <label className="toggle-inline">
                   <span>Hide acknowledged</span>
@@ -3677,132 +4247,177 @@ await createEmployeeByAdmin({
               </div>
 
               <div className="table-wrap schedule-table-wrap">
-                <table className="admin-table schedule-table">
-                  <thead>
-                    <tr>
-                      <th>Day</th>
-                      <th>Enabled</th>
-                      <th>Start</th>
-                      <th>End</th>
-                      <th>Grace</th>
-                      <th>Check In</th>
-                      <th>Check Out</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {WEEK.map((day) => {
-                      const rule = settings.weeklySchedule?.[day.key] || {}
-                      const enabled = rule.enabled !== false
-                      return (
-                        <tr key={day.key}>
-                          <td><strong>{day.label}</strong></td>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={enabled}
-                              onChange={(e) =>
-                                setSettings((old) => ({
-                                  ...old,
-                                  weeklySchedule: {
-                                    ...(old.weeklySchedule || {}),
-                                    [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), enabled: e.target.checked },
-                                  },
-                                }))
-                              }
-                              style={{ width: 18, height: 18 }}
-                              aria-label={`${day.label} enabled`}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="time"
-                              value={rule.workStart || settings.workStart}
-                              onChange={(e) =>
-                                setSettings((old) => ({
-                                  ...old,
-                                  weeklySchedule: {
-                                    ...(old.weeklySchedule || {}),
-                                    [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), workStart: e.target.value },
-                                  },
-                                }))
-                              }
-                              disabled={!enabled}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="time"
-                              value={rule.workEnd || settings.workEnd}
-                              onChange={(e) =>
-                                setSettings((old) => ({
-                                  ...old,
-                                  weeklySchedule: {
-                                    ...(old.weeklySchedule || {}),
-                                    [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), workEnd: e.target.value },
-                                  },
-                                }))
-                              }
-                              disabled={!enabled}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              min="0"
-                              value={Number(rule.graceMins ?? settings.graceMins)}
-                              onChange={(e) =>
-                                setSettings((old) => ({
-                                  ...old,
-                                  weeklySchedule: {
-                                    ...(old.weeklySchedule || {}),
-                                    [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), graceMins: Number(e.target.value) },
-                                  },
-                                }))
-                              }
-                              disabled={!enabled}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={rule.allowCheckIn !== false}
-                              onChange={(e) =>
-                                setSettings((old) => ({
-                                  ...old,
-                                  weeklySchedule: {
-                                    ...(old.weeklySchedule || {}),
-                                    [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), allowCheckIn: e.target.checked },
-                                  },
-                                }))
-                              }
-                              disabled={!enabled}
-                              style={{ width: 18, height: 18 }}
-                              aria-label={`${day.label} allow check-in`}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={rule.allowCheckOut !== false}
-                              onChange={(e) =>
-                                setSettings((old) => ({
-                                  ...old,
-                                  weeklySchedule: {
-                                    ...(old.weeklySchedule || {}),
-                                    [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), allowCheckOut: e.target.checked },
-                                  },
-                                }))
-                              }
-                              disabled={!enabled}
-                              style={{ width: 18, height: 18 }}
-                              aria-label={`${day.label} allow check-out`}
-                            />
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                <DataTable
+                  data={WEEK}
+                  columns={[
+                    {
+                      key: 'day',
+                      header: 'Day',
+                      render: (day) => <strong>{day.label}</strong>,
+                      sortable: true,
+                    },
+                    {
+                      key: 'enabled',
+                      header: 'Enabled',
+                      render: (day) => {
+                        const rule = settings.weeklySchedule?.[day.key] || {}
+                        const enabled = rule.enabled !== false
+                        return (
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={(e) =>
+                              setSettings((old) => ({
+                                ...old,
+                                weeklySchedule: {
+                                  ...(old.weeklySchedule || {}),
+                                  [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), enabled: e.target.checked },
+                                },
+                              }))
+                            }
+                            style={{ width: 18, height: 18 }}
+                            aria-label={`${day.label} enabled`}
+                          />
+                        )
+                      },
+                      sortable: false,
+                    },
+                    {
+                      key: 'workStart',
+                      header: 'Start',
+                      render: (day) => {
+                        const rule = settings.weeklySchedule?.[day.key] || {}
+                        const enabled = rule.enabled !== false
+                        return (
+                          <input
+                            type="time"
+                            value={rule.workStart || settings.workStart}
+                            onChange={(e) =>
+                              setSettings((old) => ({
+                                ...old,
+                                weeklySchedule: {
+                                  ...(old.weeklySchedule || {}),
+                                  [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), workStart: e.target.value },
+                                },
+                              }))
+                            }
+                            disabled={!enabled}
+                          />
+                        )
+                      },
+                      sortable: false,
+                    },
+                    {
+                      key: 'workEnd',
+                      header: 'End',
+                      render: (day) => {
+                        const rule = settings.weeklySchedule?.[day.key] || {}
+                        const enabled = rule.enabled !== false
+                        return (
+                          <input
+                            type="time"
+                            value={rule.workEnd || settings.workEnd}
+                            onChange={(e) =>
+                              setSettings((old) => ({
+                                ...old,
+                                weeklySchedule: {
+                                  ...(old.weeklySchedule || {}),
+                                  [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), workEnd: e.target.value },
+                                },
+                              }))
+                            }
+                            disabled={!enabled}
+                          />
+                        )
+                      },
+                      sortable: false,
+                    },
+                    {
+                      key: 'graceMins',
+                      header: 'Grace',
+                      render: (day) => {
+                        const rule = settings.weeklySchedule?.[day.key] || {}
+                        const enabled = rule.enabled !== false
+                        return (
+                          <input
+                            type="number"
+                            min="0"
+                            value={Number(rule.graceMins ?? settings.graceMins)}
+                            onChange={(e) =>
+                              setSettings((old) => ({
+                                ...old,
+                                weeklySchedule: {
+                                  ...(old.weeklySchedule || {}),
+                                  [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), graceMins: Number(e.target.value) },
+                                },
+                              }))
+                            }
+                            disabled={!enabled}
+                          />
+                        )
+                      },
+                      sortable: false,
+                    },
+                    {
+                      key: 'allowCheckIn',
+                      header: 'Check In',
+                      render: (day) => {
+                        const rule = settings.weeklySchedule?.[day.key] || {}
+                        const enabled = rule.enabled !== false
+                        return (
+                          <input
+                            type="checkbox"
+                            checked={rule.allowCheckIn !== false}
+                            onChange={(e) =>
+                              setSettings((old) => ({
+                                ...old,
+                                weeklySchedule: {
+                                  ...(old.weeklySchedule || {}),
+                                  [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), allowCheckIn: e.target.checked },
+                                },
+                              }))
+                            }
+                            disabled={!enabled}
+                            style={{ width: 18, height: 18 }}
+                            aria-label={`${day.label} allow check-in`}
+                          />
+                        )
+                      },
+                      sortable: false,
+                    },
+                    {
+                      key: 'allowCheckOut',
+                      header: 'Check Out',
+                      render: (day) => {
+                        const rule = settings.weeklySchedule?.[day.key] || {}
+                        const enabled = rule.enabled !== false
+                        return (
+                          <input
+                            type="checkbox"
+                            checked={rule.allowCheckOut !== false}
+                            onChange={(e) =>
+                              setSettings((old) => ({
+                                ...old,
+                                weeklySchedule: {
+                                  ...(old.weeklySchedule || {}),
+                                  [day.key]: { ...(old.weeklySchedule?.[day.key] || {}), allowCheckOut: e.target.checked },
+                                },
+                              }))
+                            }
+                            disabled={!enabled}
+                            style={{ width: 18, height: 18 }}
+                            aria-label={`${day.label} allow check-out`}
+                          />
+                        )
+                      },
+                      sortable: false,
+                    },
+                  ]}
+                  searchable={false}
+                  paginated={false}
+                  emptyMessage="No schedule rows available."
+                  className="schedule-table"
+                />
               </div>
 
               <p className="muted" style={{ margin: '10px 0 0' }}>
@@ -4075,7 +4690,7 @@ await createEmployeeByAdmin({
           >
             <article className="card employee-detail-drawer">
               {(() => {
-                const detailSalary = salaryRows.find((row) => row.userId === employeeDetail.uid && row.month === employeeDetailMonth) || null
+                const detailSalary = employeeDetailSalaryRows.find((row) => row.userId === employeeDetail.uid && row.month === employeeDetailMonth) || null
                 const year = Number(String(employeeDetailMonth).slice(0, 4))
                 const monthIndex = Number(String(employeeDetailMonth).slice(5, 7)) - 1
                 const firstDay = new Date(Date.UTC(year, monthIndex, 1, 12, 0, 0, 0))
@@ -4093,6 +4708,29 @@ await createEmployeeByAdmin({
                   overtime: employeeDetailRows.filter((row) => Number(row.overtimeMinutes || 0) > 0).length,
                   overtimeMinutes: employeeDetailRows.reduce((sum, row) => sum + Number(row.overtimeMinutes || 0), 0),
                 }
+                const absent = daysInMonth - summary.present
+                const salarySummary = employeeDetailSalaryRows.reduce(
+                  (acc, row) => ({
+                    months: acc.months + 1,
+                    totalFinal: acc.totalFinal + Number(row.finalSalary || 0),
+                    totalBase: acc.totalBase + Number(row.baseSalary || 0),
+                    totalDeductions: acc.totalDeductions + Number(row.deductions || 0),
+                    totalBonus: acc.totalBonus + Number(row.bonus || 0),
+                    totalPresent: acc.totalPresent + Number(row.daysPresent || 0),
+                    totalLate: acc.totalLate + Number(row.lateDays || 0),
+                    totalOvertimeHours: acc.totalOvertimeHours + Number(row.overtimeHours || 0),
+                  }),
+                  {
+                    months: 0,
+                    totalFinal: 0,
+                    totalBase: 0,
+                    totalDeductions: 0,
+                    totalBonus: 0,
+                    totalPresent: 0,
+                    totalLate: 0,
+                    totalOvertimeHours: 0,
+                  },
+                )
                 return (
                   <>
                     <div className="row between wrap employee-detail-head">
@@ -4102,13 +4740,42 @@ await createEmployeeByAdmin({
                         <p className="muted" style={{ margin: 0 }}>{employeeDetail.email}</p>
                       </div>
                       <div className="row gap wrap">
-                        <button type="button" className="ghost btn-sm" onClick={openEmployeeAttendance}>
+                        <button
+                          type="button"
+                          className="ghost btn-sm"
+                          onClick={() => setEmployeeDetailView('month')}
+                        >
+                          Month view
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost btn-sm"
+                          onClick={() => setEmployeeDetailView('history')}
+                        >
+                          Full history
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost btn-sm"
+                          onClick={openEmployeeAttendance}
+                        >
                           Open attendance
                         </button>
-                        <button type="button" className="ghost btn-sm" onClick={openEmployeeSalary}>
+                        <button
+                          type="button"
+                          className="ghost btn-sm"
+                          onClick={openEmployeeSalary}
+                        >
                           Open salary
                         </button>
-                            <button type="button" className="close" onClick={closeEmployeeDetail}>×</button>
+                        <button
+                          type="button"
+                          className="ghost btn-sm"
+                          onClick={exportEmployeeRecords}
+                          disabled={!employeeDetailRows.length && !employeeDetailSalaryRows.length}
+                        >
+                          Export records
+                        </button>
                       </div>
                     </div>
 
@@ -4127,6 +4794,7 @@ await createEmployeeByAdmin({
                         <h3>Month Summary</h3>
                         <div className="grid two compact">
                           <p><strong>Present:</strong> {summary.present}</p>
+                          <p><strong>Absent:</strong> {absent}</p>
                           <p><strong>Late:</strong> {summary.late}</p>
                           <p><strong>OT Days:</strong> {summary.overtime}</p>
                           <p><strong>OT Minutes:</strong> {summary.overtimeMinutes}</p>
@@ -4143,17 +4811,50 @@ await createEmployeeByAdmin({
                             <h3 style={{ marginBottom: 4 }}>Attendance Calendar</h3>
                             <p className="muted" style={{ margin: 0 }}>Select a day for in/out and overtime details.</p>
                           </div>
-                          <label style={{ minWidth: 180 }}>
-                            <input
-                              type="month"
-                              value={employeeDetailMonth}
-                              onChange={(event) => {
-                                setEmployeeDetailMonth(event.target.value)
-                                setEmployeeDetailDateKey('')
-                              }}
-                            />
-                          </label>
+                          <div className="row gap">
+                            <button
+                              type="button"
+                              className={`ghost btn-sm ${bulkMode ? 'active' : ''}`}
+                              onClick={() => setBulkMode(!bulkMode)}
+                            >
+                              {bulkMode ? 'Exit Bulk' : 'Bulk Edit'}
+                            </button>
+                            <label style={{ minWidth: 180 }}>
+                              <input
+                                type="month"
+                                value={employeeDetailMonth}
+                                onChange={(event) => {
+                                  setEmployeeDetailMonth(event.target.value)
+                                  setEmployeeDetailDateKey('')
+                                  setSelectedDays(new Set())
+                                }}
+                              />
+                            </label>
+                          </div>
                         </div>
+
+                        {bulkMode && selectedDays.size > 0 && (
+                          <div className="bulk-actions row gap" style={{ marginBottom: 8, padding: 8, background: 'var(--paper2)', borderRadius: 8 }}>
+                            <span>{selectedDays.size} day(s) selected</span>
+                            <button
+                              type="button"
+                              className="ghost btn-sm"
+                              onClick={() => bulkUpdateAttendance('absent')}
+                              disabled={savingAttendanceUpdate}
+                            >
+                              Mark Absent
+                            </button>
+                            <button
+                              type="button"
+                              className="danger btn-sm"
+                              onClick={() => bulkDeleteAttendance()}
+                              disabled={savingAttendanceUpdate}
+                            >
+                              Delete Selected
+                            </button>
+                          </div>
+                        )}
+
                         <div className="calendar-grid">
                           {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
                             <span key={day} className="calendar-weekday">{day}</span>
@@ -4165,44 +4866,319 @@ await createEmployeeByAdmin({
                             if (!day) return <div key={`detail-empty-${index}`} className="calendar-cell empty" />
                             const dayKey = `${employeeDetailMonth}-${String(day).padStart(2, '0')}`
                             const row = employeeDetailRows.find((entry) => entry.date === dayKey) || null
+                            const schedule = getScheduleForDate(dayKey, settings)
                             const status = row
                               ? row.checkInAt
                                 ? row.checkOutAt
                                   ? 'present'
                                   : 'open'
                                 : 'absent'
-                              : 'absent'
+                              : schedule.enabled
+                                ? 'absent'
+                                : 'dayoff'
+                            const statusLabel = row ? (row.checkInAt ? 'Present' : 'Absent') : (schedule.enabled ? 'Absent' : 'Day off')
                             const overtimeHours = Math.round((Number(row?.overtimeMinutes || 0) / 60) * 100) / 100
                             return (
-                              <button
+                              <div
                                 key={dayKey}
-                                type="button"
                                 className={`calendar-cell ${status} ${selectedDateKey === dayKey ? 'selected' : ''}`}
-                                onClick={() => setEmployeeDetailDateKey(dayKey)}
                               >
-                                <span className="calendar-day">{day}</span>
-                                <span className="calendar-status">{row ? (row.checkInAt ? 'Present' : 'Absent') : 'Absent'}</span>
-                                <span className="calendar-time">{row?.checkInAt ? formatClock(row.checkInAt) : 'No check-in'}</span>
-                                <span className="calendar-overtime">{overtimeHours > 0 ? `${overtimeHours}h OT` : status === 'absent' ? 'Missing' : 'No OT'}</span>
-                              </button>
+                                {bulkMode && (
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedDays.has(dayKey)}
+                                    onChange={(e) => {
+                                      const newSelected = new Set(selectedDays)
+                                      if (e.target.checked) {
+                                        newSelected.add(dayKey)
+                                      } else {
+                                        newSelected.delete(dayKey)
+                                      }
+                                      setSelectedDays(newSelected)
+                                    }}
+                                    style={{ position: 'absolute', top: 4, right: 4 }}
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  className="calendar-cell-button"
+                                  onClick={() => !bulkMode && setEmployeeDetailDateKey(dayKey)}
+                                  disabled={bulkMode}
+                                >
+                                  <span className="calendar-day">{day}</span>
+                                  <span className="calendar-status">{statusLabel}</span>
+                                  <span className="calendar-time">{row?.checkInAt ? formatClock(row.checkInAt) : 'No check-in'}</span>
+                                  <span className="calendar-overtime" title="Overtime hours worked beyond standard shift duration">{overtimeHours > 0 ? `${overtimeHours}h OT` : status === 'absent' ? 'Missing' : status === 'dayoff' ? 'Day off' : 'No OT'}</span>
+                                </button>
+                              </div>
                             )
                           })}
                         </div>
                       </article>
 
-                      <article className="card salary-day-detail">
-                        <h3 style={{ marginBottom: 6 }}>Selected Day</h3>
-                        <p className="muted" style={{ marginTop: 0 }}>
-                          {selectedDateKey} • {selectedDay?.checkInAt ? (selectedDay.checkOutAt ? 'Present' : 'Open shift') : 'Absent'}
-                        </p>
-                        <div className="grid two compact salary-day-grid">
-                          <p><strong>Check In:</strong> {selectedDay?.checkInAt ? formatClock(selectedDay.checkInAt) : '-'}</p>
-                          <p><strong>Check Out:</strong> {selectedDay?.checkOutAt ? formatClock(selectedDay.checkOutAt) : '-'}</p>
-                          <p><strong>Worked:</strong> {formatDurationMs(Number(selectedDay?.workedMinutes || 0) * 60000)}</p>
-                          <p><strong>OT:</strong> {Math.round((Number(selectedDay?.overtimeMinutes || 0) / 60) * 100) / 100}h</p>
-                          <p><strong>OT Pay:</strong> {Number(selectedDay?.overtimePay || 0).toLocaleString()}</p>
-                          <p><strong>Season:</strong> {selectedDay?.overtimeLabel || '-'}</p>
+                      <article className="card salary-day-detail selected-day-card">
+                        <div className="salary-day-detail-header">
+                          <div>
+                            <h3 style={{ marginBottom: 4 }}>Selected Day</h3>
+                            {(() => {
+                              const selectedSchedule = getScheduleForDate(selectedDateKey, settings)
+                              const selectedStatusLabel = selectedDay
+                                ? selectedDay.checkInAt
+                                  ? selectedDay.checkOutAt
+                                    ? 'Present'
+                                    : 'Open shift'
+                                  : selectedSchedule.enabled
+                                    ? 'Absent'
+                                    : 'Day off'
+                                : selectedSchedule.enabled
+                                  ? 'Absent'
+                                  : 'Day off'
+                              return (
+                                <p className="muted" style={{ marginTop: 0 }}>
+                                  {selectedDateKey} • {selectedStatusLabel}
+                                </p>
+                              )
+                            })()}
+                          </div>
+                          <span className="status-pill">{selectedDay?.checkInAt ? 'Present' : selectedDay?.checkOutAt ? 'Open' : 'Absent'}</span>
                         </div>
+                        <div className="salary-day-summary-grid">
+                          <div>
+                            <p className="detail-label">Check In</p>
+                            <p>{selectedDay?.checkInAt ? formatClock(selectedDay.checkInAt) : '-'}</p>
+                          </div>
+                          <div>
+                            <p className="detail-label">Check Out</p>
+                            <p>{selectedDay?.checkOutAt ? formatClock(selectedDay.checkOutAt) : '-'}</p>
+                          </div>
+                          <div>
+                            <p className="detail-label">Worked</p>
+                            <p>{formatDurationMs(Number(selectedDay?.workedMinutes || 0) * 60000)}</p>
+                          </div>
+                          <div>
+                            <p className="detail-label">OT</p>
+                            <p title="Overtime hours calculated based on shift duration and payroll rules">{Math.round((Number(selectedDay?.overtimeMinutes || 0) / 60) * 100) / 100}h</p>
+                          </div>
+                          <div>
+                            <p className="detail-label">OT Pay</p>
+                            <p title="Overtime pay calculated using configured multiplier and rate">{Number(selectedDay?.overtimePay || 0).toLocaleString()}</p>
+                          </div>
+                          <div>
+                            <p className="detail-label">Season</p>
+                            <p title="Overtime season label (e.g., holiday, weekend)">{selectedDay?.overtimeLabel || '-'}</p>
+                          </div>
+                        </div>
+                        <div className="salary-history-section">
+                          <h3>Salary history</h3>
+                          {employeeDetailSalaryRows.length ? (
+                            <DataTable
+                              data={employeeDetailSalaryRows}
+                              columns={[
+                                {
+                                  key: 'month',
+                                  header: 'Month',
+                                  sortable: true,
+                                },
+                                {
+                                  key: 'finalSalary',
+                                  header: 'Final',
+                                  render: (row) => Number(row.finalSalary || 0).toLocaleString(),
+                                  sortable: true,
+                                },
+                                {
+                                  key: 'daysPresent',
+                                  header: 'Present',
+                                  render: (row) => row.daysPresent || 0,
+                                  sortable: true,
+                                },
+                                {
+                                  key: 'lateDays',
+                                  header: 'Late',
+                                  render: (row) => row.lateDays || 0,
+                                  sortable: true,
+                                },
+                                {
+                                  key: 'overtimeHours',
+                                  header: 'OT Hrs',
+                                  render: (row) => Math.round(Number(row.overtimeHours || 0) * 100) / 100,
+                                  sortable: true,
+                                },
+                                {
+                                  key: 'baseSalary',
+                                  header: 'Base',
+                                  render: (row) => Number(row.baseSalary || 0).toLocaleString(),
+                                  sortable: true,
+                                },
+                                {
+                                  key: 'deductions',
+                                  header: 'Deductions',
+                                  render: (row) => Number(row.deductions || 0).toLocaleString(),
+                                  sortable: true,
+                                },
+                                {
+                                  key: 'bonus',
+                                  header: 'Bonus',
+                                  render: (row) => Number(row.bonus || 0).toLocaleString(),
+                                  sortable: true,
+                                },
+                              ]}
+                              searchable={false}
+                              paginated={false}
+                              emptyMessage="No recent salary record history available for this employee."
+                              className="employee-salary-history-table"
+                            />
+                          ) : (
+                            <p className="muted">No recent salary record history available for this employee.</p>
+                          )}
+                        </div>
+                        <article className="card attendance-edit-card" style={{ marginTop: 16 }}>
+                          <div className="attendance-edit-header">
+                            <h3>Edit attendance</h3>
+                            <label className="attendance-absent-toggle" title="Mark this day as absent, clearing check-in/out times">
+                              <input
+                                type="checkbox"
+                                checked={markAbsent}
+                                onChange={(event) => setMarkAbsent(event.target.checked)}
+                              />
+                              <span>Mark absent</span>
+                            </label>
+                          </div>
+                          <div className="attendance-edit-grid">
+                            <label className="attendance-edit-field">
+                              <span>Check-in time</span>
+                              <input
+                                type="time"
+                                value={dayCheckInTime}
+                                onChange={(event) => setDayCheckInTime(event.target.value)}
+                                disabled={markAbsent || employeeDetailLoading}
+                              />
+                            </label>
+                            <label className="attendance-edit-field">
+                              <span>Check-out time</span>
+                              <input
+                                type="time"
+                                value={dayCheckOutTime}
+                                onChange={(event) => setDayCheckOutTime(event.target.value)}
+                                disabled={markAbsent || employeeDetailLoading}
+                              />
+                            </label>
+                          </div>
+                          <div className="attendance-edit-actions row gap">
+                            <button
+                              type="button"
+                              className="ghost btn-sm"
+                              onClick={clearEmployeeAttendanceForDay}
+                              disabled={employeeDetailLoading || savingAttendanceUpdate}
+                            >
+                              Clear times
+                            </button>
+                            <button
+                              type="button"
+                              className="primary btn-sm"
+                              onClick={saveEmployeeAttendanceUpdate}
+                              disabled={employeeDetailLoading || savingAttendanceUpdate}
+                            >
+                              {savingAttendanceUpdate ? 'Saving...' : 'Save changes'}
+                            </button>
+                            <button
+                              type="button"
+                              className="danger btn-sm"
+                              onClick={deleteEmployeeAttendanceForDay}
+                              disabled={employeeDetailLoading || savingAttendanceUpdate || !selectedDay}
+                            >
+                              Delete day
+                            </button>
+                          </div>
+                          <p className="muted attendance-edit-note">
+                            Clear both times to mark the day absent. Use check-in time alone for an open shift.
+                          </p>
+                        </article>
+                        {employeeDetailView === 'history' ? (
+                          <article className="card salary-history-card">
+                            <div className="row between wrap" style={{ marginBottom: 10 }}>
+                              <div>
+                                <h3 style={{ marginBottom: 4 }}>Full employee history</h3>
+                                <p className="muted" style={{ margin: 0 }}>
+                                  Showing {employeeDetailSalaryRows.length} salary month(s) and current attendance details.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                className="ghost btn-sm"
+                                onClick={exportEmployeeRecords}
+                                disabled={!employeeDetailSalaryRows.length && !employeeDetailRows.length}
+                              >
+                                Export all records
+                              </button>
+                            </div>
+                            <div className="grid three compact" style={{ gap: '10px' }}>
+                              <p><strong>Months loaded:</strong> {salarySummary.months}</p>
+                              <p><strong>Total final:</strong> {salarySummary.totalFinal.toLocaleString()}</p>
+                              <p><strong>Total base:</strong> {salarySummary.totalBase.toLocaleString()}</p>
+                              <p><strong>Total deductions:</strong> {salarySummary.totalDeductions.toLocaleString()}</p>
+                              <p><strong>Total bonus:</strong> {salarySummary.totalBonus.toLocaleString()}</p>
+                              <p><strong>Total OT hrs:</strong> {Math.round(salarySummary.totalOvertimeHours * 100) / 100}</p>
+                            </div>
+                            {employeeDetailSalaryRows.length ? (
+                              <DataTable
+                                data={employeeDetailSalaryRows}
+                                columns={[
+                                  {
+                                    key: 'month',
+                                    header: 'Month',
+                                    sortable: true,
+                                  },
+                                  {
+                                    key: 'finalSalary',
+                                    header: 'Final',
+                                    render: (row) => Number(row.finalSalary || 0).toLocaleString(),
+                                    sortable: true,
+                                  },
+                                  {
+                                    key: 'baseSalary',
+                                    header: 'Base',
+                                    render: (row) => Number(row.baseSalary || 0).toLocaleString(),
+                                    sortable: true,
+                                  },
+                                  {
+                                    key: 'deductions',
+                                    header: 'Deductions',
+                                    render: (row) => Number(row.deductions || 0).toLocaleString(),
+                                    sortable: true,
+                                  },
+                                  {
+                                    key: 'bonus',
+                                    header: 'Bonus',
+                                    render: (row) => Number(row.bonus || 0).toLocaleString(),
+                                    sortable: true,
+                                  },
+                                  {
+                                    key: 'daysPresent',
+                                    header: 'Present',
+                                    render: (row) => row.daysPresent || 0,
+                                    sortable: true,
+                                  },
+                                  {
+                                    key: 'lateDays',
+                                    header: 'Late',
+                                    render: (row) => row.lateDays || 0,
+                                    sortable: true,
+                                  },
+                                  {
+                                    key: 'overtimeHours',
+                                    header: 'OT Hrs',
+                                    render: (row) => Math.round(Number(row.overtimeHours || 0) * 100) / 100,
+                                    sortable: true,
+                                  },
+                                ]}
+                                searchable={false}
+                                paginated={false}
+                                emptyMessage="No salary records available."
+                                className="employee-detail-salary-history-table"
+                              />
+                            ) : null}
+                          </article>
+                        ) : null}
                         <p className="salary-day-note muted">
                           {selectedDay?.checkInAt
                             ? selectedDay?.checkOutAt

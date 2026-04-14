@@ -746,6 +746,10 @@ async function getActiveTvDisplaySessionRecord() {
   return sessions.find((item) => item.active !== false) || null
 }
 
+export async function getActiveTvDisplaySession() {
+  return getActiveTvDisplaySessionRecord()
+}
+
 function buildTvDisplaySessionResult(sessionId, issuedBy, refreshSeconds) {
   const ttl = 10 * 365 * 24 * 60 * 60
   const issuedAtMs = Date.now()
@@ -1430,20 +1434,25 @@ export async function getSalaryRecordsForMonth(monthKey) {
 
 export async function getEmployeeSalaryRecords(userId, limitMonths = 6) {
   const uid = String(userId || '')
+  const monthsLimit = Math.max(1, Number(limitMonths) || 6)
   if (!uid) return []
   if (isFirebaseConfigured) {
-    const q = query(collection(db, 'salary_records'), where('userId', '==', uid), limit(24))
+    const q = query(
+      collection(db, 'salary_records'),
+      where('userId', '==', uid),
+      orderBy('month', 'desc'),
+      limit(monthsLimit),
+    )
     const snapshot = await getDocs(q)
     return snapshot.docs
       .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
       .sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')))
-      .slice(0, Math.max(1, Number(limitMonths) || 6))
   }
 
   return readJson(DEMO_SALARY_KEY, [])
     .filter((r) => r.userId === uid)
     .sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')))
-    .slice(0, Math.max(1, Number(limitMonths) || 6))
+    .slice(0, monthsLimit)
 }
 
 export async function getEmployeeAttendanceForMonth(userId, monthKey) {
@@ -1467,6 +1476,70 @@ export async function getEmployeeAttendanceForMonth(userId, monthKey) {
   return readJson(DEMO_LOGS_KEY, [])
     .filter((item) => item.userId === uid && item.date >= start && item.date <= end)
     .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+export async function updateAttendanceDaily(userId, date, updates) {
+  const uid = String(userId || '')
+  const trimmedDate = String(date || '').trim()
+  if (!uid) {
+    throw new Error('User ID is required to update attendance.')
+  }
+  if (!trimmedDate) {
+    throw new Error('Attendance date is required.')
+  }
+
+  const recordId = `${uid}_${trimmedDate}`
+  const payload = {
+    ...updates,
+    userId: uid,
+    date: trimmedDate,
+    updatedAt: isFirebaseConfigured ? serverTimestamp() : new Date().toISOString(),
+  }
+
+  if (isFirebaseConfigured) {
+    const recordRef = doc(db, 'attendance_daily', recordId)
+    await setDoc(recordRef, payload, { merge: true })
+    return { id: recordId, ...payload }
+  }
+
+  const records = readJson(DEMO_LOGS_KEY, [])
+  const existingIndex = records.findIndex((item) => item.userId === uid && item.date === trimmedDate)
+  const nextRecord = existingIndex >= 0
+    ? { ...records[existingIndex], ...payload }
+    : { id: recordId, ...payload }
+
+  if (existingIndex >= 0) {
+    records[existingIndex] = nextRecord
+  } else {
+    records.push(nextRecord)
+  }
+
+  writeJson(DEMO_LOGS_KEY, records)
+  return nextRecord
+}
+
+export async function deleteAttendanceDaily(userId, date) {
+  const uid = String(userId || '')
+  const trimmedDate = String(date || '').trim()
+  if (!uid) {
+    throw new Error('User ID is required to delete attendance.')
+  }
+  if (!trimmedDate) {
+    throw new Error('Attendance date is required.')
+  }
+
+  const recordId = `${uid}_${trimmedDate}`
+
+  if (isFirebaseConfigured) {
+    const recordRef = doc(db, 'attendance_daily', recordId)
+    await deleteDoc(recordRef)
+    return true
+  }
+
+  const records = readJson(DEMO_LOGS_KEY, [])
+  const filtered = records.filter((item) => !(item.userId === uid && item.date === trimmedDate))
+  writeJson(DEMO_LOGS_KEY, filtered)
+  return true
 }
 
 export async function getEmployeeDailyPayments(userId, monthKey) {
@@ -1645,10 +1718,19 @@ export async function getLateAlerts(date = getTodayKey()) {
     const snapshot = await getDocs(
       query(collection(db, 'attendance_logs'), where('date', '==', date), where('late', '==', true)),
     )
-    return snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+    return snapshot.docs.map((docItem) => ({
+      id: docItem.id,
+      _key: docItem.id,
+      ...docItem.data(),
+    }))
   }
 
-  return readJson('scantrack_demo_action_logs', []).filter((item) => item.date === date && item.late)
+  return readJson('scantrack_demo_action_logs', [])
+    .filter((item) => item.date === date && item.late)
+    .map((item) => ({
+      ...item,
+      _key: item._key || item.id || `${item.userId || 'unknown'}-${item.date || 'nodate'}-${item.clientTs || 'noclient'}`,
+    }))
 }
 
 export async function getEmployeeDirectory(date = getTodayKey()) {
@@ -2065,21 +2147,30 @@ export async function createTvDisplaySession(user, refreshSeconds) {
 }
 
 export async function issueTvToken(userOrOptions, refreshSeconds) {
-  const currentSettings = await getAdminSettings().catch(() => DEFAULT_SETTINGS)
-  const ttl = normalizeRefreshIntervalSeconds(refreshSeconds || currentSettings.refreshInterval || APP_CONFIG.tokenRefreshSeconds)
   const actor = userOrOptions && typeof userOrOptions === 'object' && 'displaySessionToken' in userOrOptions
     ? userOrOptions
     : { user: userOrOptions }
   const user = actor.user || null
   const displaySessionToken = String(actor.displaySessionToken || '').trim()
   let displaySession = null
+  let sessionRefreshSeconds = null
+  let currentSettings = DEFAULT_SETTINGS
 
   if (!isFirebaseConfigured && displaySessionToken) {
     displaySession = await getTvDisplaySessionRecord(displaySessionToken)
     if (!displaySession || displaySession.active === false || Number(displaySession.expiresAtMs || 0) < Date.now()) {
       throw new Error('TV display session expired. Re-open the TV link from admin.')
     }
+    sessionRefreshSeconds = Number(displaySession.refreshInterval || 0)
   }
+
+  if (!isFirebaseConfigured || !displaySessionToken) {
+    currentSettings = await getAdminSettings().catch(() => DEFAULT_SETTINGS)
+  }
+
+  const ttl = normalizeRefreshIntervalSeconds(
+    refreshSeconds || sessionRefreshSeconds || currentSettings.refreshInterval || APP_CONFIG.tokenRefreshSeconds,
+  )
 
   if (isFirebaseConfigured) {
     const issueToken = httpsCallable(cloudFunctions, 'issueTvToken')

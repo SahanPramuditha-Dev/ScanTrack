@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { APP_CONFIG } from '../config'
 import { downloadCsv } from '../lib/csv'
 import { formatDateKey, getTodayKey, humanDateTime, humanTime } from '../lib/time'
+import { useToast } from '../components/useToast'
+import { EmptyState } from '../components/EmptyState'
+import { LoadingSpinner } from '../components/Loading'
+import { DataTable } from '../components/DataTable'
 import {
   demoSignIn,
   formatAuthName,
@@ -23,13 +27,12 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export function EmployeePage() {
+  const toast = useToast()
   const [user, setUser] = useState(null)
   const [token, setToken] = useState(getTokenFromUrl())
   const [urlToken, setUrlToken] = useState(getTokenFromUrl())
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
   const [record, setRecord] = useState(null)
   const [history, setHistory] = useState([])
   const [nextAction, setNextAction] = useState('checkIn')
@@ -44,7 +47,9 @@ export function EmployeePage() {
   const [attendanceMonthRows, setAttendanceMonthRows] = useState([])
   const [selectedAttendanceDate, setSelectedAttendanceDate] = useState(getTodayKey())
   const [salaryMonth, setSalaryMonth] = useState(getTodayKey().slice(0, 7))
+  const [attendanceMonth, setAttendanceMonth] = useState(getTodayKey().slice(0, 7))
   const [payrollLoading, setPayrollLoading] = useState(false)
+  const [attendanceLoading, setAttendanceLoading] = useState(false)
 
   useEffect(() => subscribeAuth(setUser), [])
 
@@ -67,6 +72,7 @@ export function EmployeePage() {
       setSalaryRecords([])
       setDailyPayments([])
       setAttendanceMonthRows([])
+      setAttendanceMonth(getTodayKey().slice(0, 7))
       return
     }
 
@@ -81,8 +87,8 @@ export function EmployeePage() {
       setHistory(lastDays)
     }
 
-    load().catch((err) => setError(err.message))
-  }, [user])
+    load().catch((err) => toast.addToast(err.message, 'error'))
+  }, [user, toast])
 
   useEffect(() => {
     if (!user) return
@@ -92,21 +98,18 @@ export function EmployeePage() {
       const uid = user.uid || user.id
       setPayrollLoading(true)
       try {
-        const [estimate, records, payments, attendanceRows] = await Promise.all([
+        const [estimate, records, payments] = await Promise.all([
           getEmployeeSalaryEstimate(uid, salaryMonth).catch(() => null),
           getEmployeeSalaryRecords(uid, 24).catch(() => []),
           getEmployeeDailyPayments(uid, salaryMonth).catch(() => []),
-          getEmployeeAttendanceForMonth(uid, salaryMonth).catch(() => []),
         ])
         if (cancelled) return
         setSalaryEstimate(estimate)
         setSalaryRecords(records)
         setDailyPayments(payments)
-        setAttendanceMonthRows(attendanceRows)
-        setSelectedAttendanceDate(attendanceRows[0]?.date || `${salaryMonth}-01`)
       } catch (err) {
         if (!cancelled) {
-          setError(err.message)
+          toast.addToast(err.message, 'error')
         }
       } finally {
         if (!cancelled) {
@@ -120,7 +123,37 @@ export function EmployeePage() {
     return () => {
       cancelled = true
     }
-  }, [user, salaryMonth])
+  }, [user, salaryMonth, toast])
+
+  useEffect(() => {
+    if (!user) return
+
+    let cancelled = false
+    const loadAttendanceMonth = async () => {
+      const uid = user.uid || user.id
+      setAttendanceLoading(true)
+      try {
+        const attendanceRows = await getEmployeeAttendanceForMonth(uid, attendanceMonth).catch(() => [])
+        if (cancelled) return
+        setAttendanceMonthRows(attendanceRows)
+        setSelectedAttendanceDate(attendanceRows[0]?.date || `${attendanceMonth}-01`)
+      } catch (err) {
+        if (!cancelled) {
+          toast.addToast(err.message, 'error')
+        }
+      } finally {
+        if (!cancelled) {
+          setAttendanceLoading(false)
+        }
+      }
+    }
+
+    loadAttendanceMonth()
+
+    return () => {
+      cancelled = true
+    }
+  }, [attendanceMonth, user, toast])
 
   const captureGps = useCallback(({ highAccuracy = false } = {}) => new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -158,7 +191,7 @@ export function EmployeePage() {
       .then((nextGps) => {
         setGps(nextGps)
         setGpsState('ready')
-        setGpsMessage(`Location ready · ${nextGps.lat.toFixed(5)}, ${nextGps.lng.toFixed(5)}`)
+        setGpsMessage(`Location ready | ${nextGps.lat.toFixed(5)}, ${nextGps.lng.toFixed(5)}`)
       })
       .catch((geoError) => {
         setGps(null)
@@ -199,36 +232,32 @@ export function EmployeePage() {
 
   const handleDemoLogin = async (event) => {
     event.preventDefault()
-    setError('')
-    setMessage('')
 
     const loginEmail = inviteEmail || email
     if (!loginEmail.trim()) {
-      setError('Enter your work email address or use invite link.')
+      toast.addToast('Enter your work email address or use invite link.', 'warning')
       return
     }
 
     setLoading(true)
     try {
       await demoSignIn(loginEmail)
-      setMessage('Signed in successfully.')
+      toast.addToast('Signed in successfully.', 'success')
     } catch (err) {
-      setError(err.message)
+      toast.addToast(err.message, 'error')
     } finally {
       setLoading(false)
     }
   }
 
   const handleGoogleLogin = async () => {
-    setError('')
-    setMessage('')
     setLoading(true)
 
     try {
       await signInWithGoogle()
-      setMessage('Signed in successfully.')
+      toast.addToast('Signed in successfully.', 'success')
     } catch (err) {
-      setError(err.message)
+      toast.addToast(err.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -249,8 +278,6 @@ export function EmployeePage() {
   const handleSubmit = async (action) => {
     if (!canSubmit || action !== nextAction) return
 
-    setError('')
-    setMessage('')
     setLoading(true)
     setGpsState('checking')
     setGpsMessage('Refreshing location for secure check-in...')
@@ -261,7 +288,7 @@ export function EmployeePage() {
         currentGps = await captureGps({ highAccuracy: true })
         setGps(currentGps)
         setGpsState('ready')
-        setGpsMessage(`Live location confirmed · ${currentGps.lat.toFixed(5)}, ${currentGps.lng.toFixed(5)}`)
+        setGpsMessage(`Live location confirmed | ${currentGps.lat.toFixed(5)}, ${currentGps.lng.toFixed(5)}`)
       } catch {
         currentGps = null
         setGps(null)
@@ -275,14 +302,18 @@ export function EmployeePage() {
         action,
       })
       setTokenExpired(false)
-      setMessage(result.message)
+      toast.addToast(result.message, 'success')
       await refreshEmployee()
+      const uid = user.uid || user.id
+      const attendanceRows = await getEmployeeAttendanceForMonth(uid, attendanceMonth).catch(() => [])
+      setAttendanceMonthRows(attendanceRows)
+      setSelectedAttendanceDate(getTodayKey())
     } catch (err) {
       if (String(err?.message || '').toLowerCase().includes('expired')) {
         setTokenExpired(true)
         setTokenExpiresIn(0)
       }
-      setError(err.message)
+      toast.addToast(err.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -297,7 +328,7 @@ export function EmployeePage() {
       const nextGps = await captureGps({ highAccuracy: true })
       setGps(nextGps)
       setGpsState('ready')
-      setGpsMessage(`Location ready · ${nextGps.lat.toFixed(5)}, ${nextGps.lng.toFixed(5)}`)
+      setGpsMessage(`Location ready | ${nextGps.lat.toFixed(5)}, ${nextGps.lng.toFixed(5)}`)
     } catch (geoError) {
       setGps(null)
       setGpsState('blocked')
@@ -315,14 +346,12 @@ export function EmployeePage() {
 
   const handleSignOut = async () => {
     await signOut()
-    setMessage('Signed out.')
+    toast.addToast('Signed out.', 'info')
   }
 
   const handleTokenChange = (value) => {
     setToken(value.toUpperCase())
     setTokenExpired(false)
-    setError('')
-    setMessage('')
   }
 
   const tokenMeta = useMemo(() => {
@@ -337,12 +366,12 @@ export function EmployeePage() {
 
   const workState = useMemo(() => {
     if (record?.checkInAt && !record?.checkOutAt) {
-      return { label: 'Checked in today', icon: '🟢', time: humanDateTime(record.checkInAt) }
+      return { label: 'Checked in today', icon: 'In', time: humanDateTime(record.checkInAt) }
     }
     if (record?.checkInAt && record?.checkOutAt) {
-      return { label: 'Checked out for today', icon: '🔘', time: humanDateTime(record.checkOutAt) }
+      return { label: 'Checked out for today', icon: 'Out', time: humanDateTime(record.checkOutAt) }
     }
-    return { label: 'Not checked in today', icon: '🟣', time: '-' }
+    return { label: 'Not checked in today', icon: 'Idle', time: '-' }
   }, [record])
 
   const historyRows = useMemo(() => {
@@ -356,9 +385,9 @@ export function EmployeePage() {
         idx === 0 ? 'Today' : idx === 1 ? 'Yest.' : dateObj.toLocaleDateString('en-US', { weekday: 'short' })
       const timeline = dayData?.checkInAt
         ? dayData?.checkOutAt
-          ? `${new Date(dayData.checkInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} → ${new Date(dayData.checkOutAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          ? `${new Date(dayData.checkInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -> ${new Date(dayData.checkOutAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
           : new Date(dayData.checkInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        : '—'
+        : '--'
       const status = dayData?.checkInAt ? (dayData.late ? 'Late' : 'On Time') : 'Absent'
       return {
         key: dateKey,
@@ -405,7 +434,7 @@ export function EmployeePage() {
     [attendanceMonthRows],
   )
 
-  const selectedMonthDate = useMemo(() => new Date(`${salaryMonth}-01T00:00:00`), [salaryMonth])
+  const selectedMonthDate = useMemo(() => new Date(`${attendanceMonth}-01T00:00:00`), [attendanceMonth])
   const daysInSelectedMonth = useMemo(
     () => new Date(selectedMonthDate.getFullYear(), selectedMonthDate.getMonth() + 1, 0).getDate(),
     [selectedMonthDate],
@@ -455,7 +484,7 @@ export function EmployeePage() {
     const checkedInDays = history.filter((item) => item.checkInAt).length
     const lateDays = history.filter((item) => item.late).length
     const checkedOutDays = history.filter((item) => item.checkOutAt).length
-    const lastActivity = historyRows.find((row) => row.timeline && row.timeline !== '—') || null
+    const lastActivity = historyRows.find((row) => row.timeline && row.timeline !== '--') || null
     return {
       checkedInDays,
       lateDays,
@@ -531,7 +560,7 @@ export function EmployeePage() {
                 <p className="eyebrow">Employee Profile</p>
                 <h2>{formatAuthName(user)}</h2>
                 <p className="muted employee-user-id">
-                  {user?.uid || user?.id || '-'} · {formatRole(user)}
+                  {user?.uid || user?.id || '-'} - {formatRole(user)}
                 </p>
               </div>
             </div>
@@ -567,7 +596,7 @@ export function EmployeePage() {
                   <h3>{tokenMeta.label}</h3>
                 </div>
                 <span className="muted employee-token-expiry">
-                  Expires in {tokenExpiresIn == null ? '—' : `${tokenExpiresIn}s`}
+                  Expires in {tokenExpiresIn == null ? '--' : `${tokenExpiresIn}s`}
                 </span>
               </div>
               <div className="employee-token-input-wrap">
@@ -610,7 +639,7 @@ export function EmployeePage() {
 
               <div className="employee-gps-line">
                 <span className={gpsDotClass} />
-                <span>{gps ? `Location verified · ${gpsLabel}` : gpsMessage}</span>
+                <span>{gps ? `Location verified - ${gpsLabel}` : gpsMessage}</span>
               </div>
               <p className="muted employee-gps-help">
                 GPS is checked again when you tap check in or check out. If you are outside the allowed shop radius, attendance will be blocked.
@@ -618,13 +647,6 @@ export function EmployeePage() {
               <button type="button" className="employee-gps-refresh" onClick={handleRefreshGps} disabled={loading || gpsState === 'checking'}>
                 {gpsState === 'checking' ? 'Checking location...' : 'Retry location'}
               </button>
-
-              {(message || error) && (
-                <div className="employee-feedback">
-                  {message && <p className="success-text">{message}</p>}
-                  {error && <p className="error-text">{error}</p>}
-                </div>
-              )}
             </section>
           </section>
 
@@ -678,39 +700,75 @@ export function EmployeePage() {
               ) : null}
             {salaryMonthRecords.length ? (
               <div className="table-wrap employee-table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Month</th>
-                      <th>Final</th>
-                      <th>Present</th>
-                      <th>Late</th>
-                      <th>OT Hrs</th>
-                      <th>OT Pay</th>
-                      <th>Base</th>
-                      <th>Deductions</th>
-                      <th>Bonus</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {salaryMonthRecords.map((rec) => (
-                      <tr key={rec.id}>
-                        <td>{rec.month}</td>
-                        <td><strong>{Number(rec.finalSalary || 0).toLocaleString()}</strong></td>
-                        <td>{rec.daysPresent}</td>
-                        <td>{rec.lateDays}</td>
-                        <td>{Math.round(Number(rec.overtimeHours || 0) * 100) / 100}</td>
-                        <td>{Number(rec.overtimePay || 0).toLocaleString()}</td>
-                        <td>{Number(rec.baseSalary || 0).toLocaleString()}</td>
-                        <td>{Number(rec.deductions || 0).toLocaleString()}</td>
-                        <td>{Number(rec.bonus || 0).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <DataTable
+                  data={salaryMonthRecords}
+                  columns={[
+                    {
+                      key: 'month',
+                      header: 'Month',
+                      sortable: true,
+                    },
+                    {
+                      key: 'finalSalary',
+                      header: 'Final',
+                      render: (rec) => <strong>{Number(rec.finalSalary || 0).toLocaleString()}</strong>,
+                      sortable: true,
+                    },
+                    {
+                      key: 'daysPresent',
+                      header: 'Present',
+                      render: (rec) => rec.daysPresent,
+                      sortable: true,
+                    },
+                    {
+                      key: 'lateDays',
+                      header: 'Late',
+                      render: (rec) => rec.lateDays,
+                      sortable: true,
+                    },
+                    {
+                      key: 'overtimeHours',
+                      header: 'OT Hrs',
+                      render: (rec) => Math.round(Number(rec.overtimeHours || 0) * 100) / 100,
+                      sortable: true,
+                    },
+                    {
+                      key: 'overtimePay',
+                      header: 'OT Pay',
+                      render: (rec) => Number(rec.overtimePay || 0).toLocaleString(),
+                      sortable: true,
+                    },
+                    {
+                      key: 'baseSalary',
+                      header: 'Base',
+                      render: (rec) => Number(rec.baseSalary || 0).toLocaleString(),
+                      sortable: true,
+                    },
+                    {
+                      key: 'deductions',
+                      header: 'Deductions',
+                      render: (rec) => Number(rec.deductions || 0).toLocaleString(),
+                      sortable: true,
+                    },
+                    {
+                      key: 'bonus',
+                      header: 'Bonus',
+                      render: (rec) => Number(rec.bonus || 0).toLocaleString(),
+                      sortable: true,
+                    },
+                  ]}
+                  searchable={false}
+                  paginated={false}
+                  emptyMessage="No salary records available."
+                  className="employee-salary-records-table"
+                />
               </div>
             ) : (
-              <p className="muted employee-empty">No salary records yet. Ask admin to generate payroll.</p>
+              <EmptyState
+                icon="💰"
+                title="No salary records"
+                description="Your monthly salary calculations will appear here once payroll is processed."
+              />
             )}
             {dailyPayments.length ? (
               <div className="employee-daily-section">
@@ -724,28 +782,44 @@ export function EmployeePage() {
                   </p>
                 </div>
                 <div className="table-wrap employee-table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Daily Salary</th>
-                        <th>Deductions</th>
-                        <th>Net</th>
-                        <th>Notes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dailyPayments.map((rec) => (
-                        <tr key={rec.id}>
-                          <td>{rec.date}</td>
-                          <td>{Number(rec.dailySalary || 0).toLocaleString()}</td>
-                          <td>{Number(rec.totalDeductions || 0).toLocaleString()}</td>
-                          <td><strong>{Number(rec.netPay || 0).toLocaleString()}</strong></td>
-                          <td>{rec.notes || '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <DataTable
+                    data={dailyPayments}
+                    columns={[
+                      {
+                        key: 'date',
+                        header: 'Date',
+                        sortable: true,
+                      },
+                      {
+                        key: 'dailySalary',
+                        header: 'Daily Salary',
+                        render: (rec) => Number(rec.dailySalary || 0).toLocaleString(),
+                        sortable: true,
+                      },
+                      {
+                        key: 'totalDeductions',
+                        header: 'Deductions',
+                        render: (rec) => Number(rec.totalDeductions || 0).toLocaleString(),
+                        sortable: true,
+                      },
+                      {
+                        key: 'netPay',
+                        header: 'Net',
+                        render: (rec) => <strong>{Number(rec.netPay || 0).toLocaleString()}</strong>,
+                        sortable: true,
+                      },
+                      {
+                        key: 'notes',
+                        header: 'Notes',
+                        render: (rec) => rec.notes || '-',
+                        sortable: false,
+                      },
+                    ]}
+                    searchable={false}
+                    paginated={false}
+                    emptyMessage="No daily payment records available."
+                    className="employee-daily-payments-table"
+                  />
                 </div>
               </div>
             ) : null}
@@ -758,7 +832,7 @@ export function EmployeePage() {
             <div className="row between wrap employee-calendar-head">
               <div>
                 <p className="eyebrow">Attendance Calendar</p>
-                <h2>{salaryMonth}</h2>
+                <h2>{attendanceMonth}</h2>
               </div>
               <div className="employee-calendar-summary">
                 <span className="pill ok">Present {attendanceMonthSummary.present}</span>
@@ -766,6 +840,12 @@ export function EmployeePage() {
                 <span className="pill neutral">Late {attendanceMonthSummary.late}</span>
                 <span className="pill neutral">OT {Math.round(attendanceMonthSummary.overtimeHours * 100) / 100}h</span>
               </div>
+            </div>
+            <div className="row gap wrap employee-payroll-actions">
+              <label>
+                <input type="month" value={attendanceMonth} onChange={(e) => setAttendanceMonth(e.target.value)} />
+              </label>
+              {attendanceLoading ? <span className="muted">Loading attendance...</span> : null}
             </div>
 
             <div className="employee-calendar-grid employee-calendar-weekdays" aria-hidden="true">
@@ -793,10 +873,10 @@ export function EmployeePage() {
                       {cell.status === 'present' ? 'Present' : cell.status === 'late' ? 'Late' : 'Absent'}
                     </span>
                     <span className="employee-calendar-time">
-                      {cell.row?.checkInAt ? humanTime(new Date(cell.row.checkInAt)) : '—'}
+                      In: {cell.row?.checkInAt ? humanTime(new Date(cell.row.checkInAt)) : '--'}
                     </span>
                     <span className="employee-calendar-time">
-                      {cell.row?.checkOutAt ? humanTime(new Date(cell.row.checkOutAt)) : '—'}
+                      Out: {cell.row?.checkOutAt ? humanTime(new Date(cell.row.checkOutAt)) : '--'}
                     </span>
                     {Number(cell.row?.overtimeMinutes || 0) > 0 ? (
                       <span className="employee-calendar-overtime">
@@ -816,19 +896,19 @@ export function EmployeePage() {
               <div className="employee-calendar-detail-grid">
                 <article>
                   <span>Check In</span>
-                  <strong>{selectedAttendanceRecord?.checkInAt ? humanDateTime(selectedAttendanceRecord.checkInAt) : '—'}</strong>
+                  <strong>{selectedAttendanceRecord?.checkInAt ? humanDateTime(selectedAttendanceRecord.checkInAt) : '--'}</strong>
                 </article>
                 <article>
                   <span>Check Out</span>
-                  <strong>{selectedAttendanceRecord?.checkOutAt ? humanDateTime(selectedAttendanceRecord.checkOutAt) : '—'}</strong>
+                  <strong>{selectedAttendanceRecord?.checkOutAt ? humanDateTime(selectedAttendanceRecord.checkOutAt) : '--'}</strong>
                 </article>
                 <article>
                   <span>Worked</span>
-                  <strong>{Number(selectedAttendanceRecord?.workedMinutes || 0) ? `${Math.round(Number(selectedAttendanceRecord.workedMinutes || 0) / 60)}h` : '—'}</strong>
+                  <strong>{Number(selectedAttendanceRecord?.workedMinutes || 0) ? `${Math.round(Number(selectedAttendanceRecord.workedMinutes || 0) / 60)}h` : '--'}</strong>
                 </article>
                 <article>
                   <span>Overtime</span>
-                  <strong>{Number(selectedAttendanceRecord?.overtimeHours || 0) ? `${Math.round(Number(selectedAttendanceRecord.overtimeHours || 0) * 100) / 100}h` : '—'}</strong>
+                  <strong>{Number(selectedAttendanceRecord?.overtimeHours || 0) ? `${Math.round(Number(selectedAttendanceRecord.overtimeHours || 0) * 100) / 100}h` : '--'}</strong>
                 </article>
                 <article>
                   <span>OT Pay</span>
@@ -836,7 +916,7 @@ export function EmployeePage() {
                 </article>
                 <article>
                   <span>Season</span>
-                  <strong>{selectedAttendanceRecord?.overtimeLabel || '—'}</strong>
+                  <strong>{selectedAttendanceRecord?.overtimeLabel || '--'}</strong>
                 </article>
               </div>
               <p className="muted employee-calendar-note">
@@ -853,16 +933,24 @@ export function EmployeePage() {
               </div>
             </div>
             <div className="employee-history-list">
-              {historyRows.map((item) => (
-                <div key={item.key} className="employee-history-row">
-                  <span className="employee-history-dot" />
-                  <span>{item.label}</span>
-                  <span>{item.timeline}</span>
-                  <span className={`employee-history-pill ${item.status.toLowerCase().replace(' ', '-')}`}>
-                    {item.status}
-                  </span>
-                </div>
-              ))}
+              {historyRows.length === 0 ? (
+                <EmptyState
+                  icon="📅"
+                  title="No attendance records"
+                  description="Your recent check-ins and check-outs will appear here."
+                />
+              ) : (
+                historyRows.map((item) => (
+                  <div key={item.key} className="employee-history-row">
+                    <span className="employee-history-dot" />
+                    <span>{item.label}</span>
+                    <span>{item.timeline}</span>
+                    <span className={`employee-history-pill ${item.status.toLowerCase().replace(' ', '-')}`}>
+                      {item.status}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </section>
         </div>
