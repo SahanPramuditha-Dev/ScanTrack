@@ -1,19 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
-import { formatDateKey, getTodayKey } from '../lib/time'
+import { formatDateKey } from '../lib/time'
 
 // DatePicker Component
 export function DatePicker({ value, onChange, placeholder = 'Select date', className = '', disabled = false }) {
   const [isOpen, setIsOpen] = useState(false)
-  const [currentMonth, setCurrentMonth] = useState(new Date())
+  const [currentMonth, setCurrentMonth] = useState(() => value ? new Date(`${value}T12:00:00.000Z`) : new Date())
   const inputRef = useRef(null)
   const calendarRef = useRef(null)
-
-  useEffect(() => {
-    if (value) {
-      const date = new Date(`${value}T12:00:00.000Z`)
-      setCurrentMonth(date)
-    }
-  }, [value])
 
   useEffect(() => {
     const handleClickOutside = (event) => {

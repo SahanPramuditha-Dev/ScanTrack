@@ -60,6 +60,18 @@ const DEFAULT_SETTINGS = {
     latePenaltyFraction: 0.5, // dailyRate * fraction per late day
     perfectAttendanceBonus: 0, // fixed amount
     noLateBonus: 0, // fixed amount
+    housingAllowanceDefault: 0,
+    transportAllowanceDefault: 0,
+    medicalAllowanceDefault: 0,
+    taxEnabled: false,
+    taxLabel: 'PAYE',
+    taxMode: 'percent',
+    taxPercent: 0,
+    taxFixed: 0,
+    taxRelief: 0,
+    attendanceIntegrationMode: 'manual',
+    leaveIntegrationMode: 'manual',
+    payslipDeliveryMode: 'portal_pdf',
     overtimeEnabled: true,
     overtimeThresholdMins: 0,
     overtimeMultiplier: 1.5,
@@ -144,6 +156,18 @@ function normalizePayrollRules(settings) {
     latePenaltyFraction: Number(provided.latePenaltyFraction ?? DEFAULT_SETTINGS.payrollRules.latePenaltyFraction) || 0,
     perfectAttendanceBonus: Number(provided.perfectAttendanceBonus ?? DEFAULT_SETTINGS.payrollRules.perfectAttendanceBonus) || 0,
     noLateBonus: Number(provided.noLateBonus ?? DEFAULT_SETTINGS.payrollRules.noLateBonus) || 0,
+    housingAllowanceDefault: Number(provided.housingAllowanceDefault ?? DEFAULT_SETTINGS.payrollRules.housingAllowanceDefault) || 0,
+    transportAllowanceDefault: Number(provided.transportAllowanceDefault ?? DEFAULT_SETTINGS.payrollRules.transportAllowanceDefault) || 0,
+    medicalAllowanceDefault: Number(provided.medicalAllowanceDefault ?? DEFAULT_SETTINGS.payrollRules.medicalAllowanceDefault) || 0,
+    taxEnabled: provided.taxEnabled === true,
+    taxLabel: String(provided.taxLabel || DEFAULT_SETTINGS.payrollRules.taxLabel),
+    taxMode: String(provided.taxMode || DEFAULT_SETTINGS.payrollRules.taxMode).toLowerCase() === 'fixed' ? 'fixed' : 'percent',
+    taxPercent: Number(provided.taxPercent ?? DEFAULT_SETTINGS.payrollRules.taxPercent) || 0,
+    taxFixed: Number(provided.taxFixed ?? DEFAULT_SETTINGS.payrollRules.taxFixed) || 0,
+    taxRelief: Number(provided.taxRelief ?? DEFAULT_SETTINGS.payrollRules.taxRelief) || 0,
+    attendanceIntegrationMode: String(provided.attendanceIntegrationMode || DEFAULT_SETTINGS.payrollRules.attendanceIntegrationMode),
+    leaveIntegrationMode: String(provided.leaveIntegrationMode || DEFAULT_SETTINGS.payrollRules.leaveIntegrationMode),
+    payslipDeliveryMode: String(provided.payslipDeliveryMode || DEFAULT_SETTINGS.payrollRules.payslipDeliveryMode),
     overtimeEnabled: provided.overtimeEnabled !== false,
     overtimeThresholdMins: Number(provided.overtimeThresholdMins ?? DEFAULT_SETTINGS.payrollRules.overtimeThresholdMins) || 0,
     overtimeMultiplier: Number(provided.overtimeMultiplier ?? DEFAULT_SETTINGS.payrollRules.overtimeMultiplier) || DEFAULT_SETTINGS.payrollRules.overtimeMultiplier,
@@ -261,13 +285,45 @@ function sumCurrency(value) {
   return Math.round(n * 100) / 100
 }
 
-export function computeSalary({ dailyRate, allowedHolidays, expectedWorkDays, daysPresent, lateDays, manualAgg = {}, overtimeAgg = {}, rules, payType, roleRate }) {
+function buildEmployeePayrollProfile(employee = {}, rules = {}) {
+  const taxMode = String(employee.taxMode || rules.taxMode || 'percent').toLowerCase() === 'fixed' ? 'fixed' : 'percent'
+  const hasTaxOverride = employee.taxEnabled === true || employee.taxEnabled === false
+  return {
+    employeeCode: String(employee.employeeCode || '').trim(),
+    grade: String(employee.grade || '').trim(),
+    employmentType: String(employee.employmentType || 'permanent').trim(),
+    attendanceSource: String(employee.attendanceSource || rules.attendanceIntegrationMode || 'manual').trim(),
+    bankName: String(employee.bankName || '').trim(),
+    bankAccountNo: String(employee.bankAccountNo || '').trim(),
+    bankBranch: String(employee.bankBranch || '').trim(),
+    taxNumber: String(employee.taxNumber || '').trim(),
+    taxLabel: String(employee.taxLabel || rules.taxLabel || 'PAYE').trim(),
+    housingAllowance: sumCurrency(employee.housingAllowance ?? rules.housingAllowanceDefault ?? 0),
+    transportAllowance: sumCurrency(employee.transportAllowance ?? rules.transportAllowanceDefault ?? 0),
+    medicalAllowance: sumCurrency(employee.medicalAllowance ?? rules.medicalAllowanceDefault ?? 0),
+    taxEnabled: hasTaxOverride ? employee.taxEnabled === true : rules.taxEnabled === true,
+    taxMode,
+    taxPercent: sumCurrency(employee.taxPercent ?? rules.taxPercent ?? 0),
+    taxFixed: sumCurrency(employee.taxFixed ?? rules.taxFixed ?? 0),
+    taxRelief: sumCurrency(employee.taxRelief ?? rules.taxRelief ?? 0),
+    loanBalance: sumCurrency(employee.loanBalance ?? 0),
+    loanInstallment: sumCurrency(employee.loanInstallment ?? 0),
+    advanceBalance: sumCurrency(employee.advanceBalance ?? 0),
+    advanceInstallment: sumCurrency(employee.advanceInstallment ?? 0),
+    bonusAmount: sumCurrency(employee.bonusAmount ?? 0),
+    festivalBonus: sumCurrency(employee.festivalBonus ?? 0),
+    commissionAmount: sumCurrency(employee.commissionAmount ?? 0),
+  }
+}
+
+export function computeSalary({ dailyRate, allowedHolidays, expectedWorkDays, daysPresent, lateDays, manualAgg = {}, overtimeAgg = {}, rules, payType, roleRate, employeeProfile = {} }) {
   const rate = sumCurrency(dailyRate)
   const expected = Math.max(0, Number(expectedWorkDays) || 0)
   const present = Math.max(0, Number(daysPresent) || 0)
   const late = Math.max(0, Number(lateDays) || 0)
   const allow = Math.max(0, Number(allowedHolidays) || 0)
   const payroll = normalizePayrollRules({ payrollRules: rules })
+  const employeePayroll = buildEmployeePayrollProfile(employeeProfile, payroll)
 
   const daysAbsent = payType === 'MONTHLY' ? 0 : Math.max(0, expected - present)
 
@@ -296,14 +352,25 @@ export function computeSalary({ dailyRate, allowedHolidays, expectedWorkDays, da
   const overtimePay = sumCurrency(overtimeAgg.totalOvertimePay || 0)
   const overtimeMinutes = Math.max(0, Number(overtimeAgg.totalOvertimeMinutes) || 0)
   const overtimeHours = Math.round((overtimeMinutes / 60) * 100) / 100
+  const allowancesTotal = sumCurrency(
+    employeePayroll.housingAllowance + employeePayroll.transportAllowance + employeePayroll.medicalAllowance,
+  )
+  const incentivePay = sumCurrency(
+    employeePayroll.bonusAmount + employeePayroll.festivalBonus + employeePayroll.commissionAmount,
+  )
+  const attendanceBonus =
+    sumCurrency((daysAbsent === 0 ? payroll.perfectAttendanceBonus : 0) + (late === 0 ? payroll.noLateBonus : 0))
+  const taxableIncome = sumCurrency(Math.max(0, attendanceBase + manualSalary + overtimePay + allowancesTotal + incentivePay + attendanceBonus - employeePayroll.taxRelief))
+  const taxDeduction = employeePayroll.taxEnabled
+    ? sumCurrency(employeePayroll.taxMode === 'fixed' ? employeePayroll.taxFixed : (taxableIncome * employeePayroll.taxPercent) / 100)
+    : 0
+  const loanInstallment = sumCurrency(Math.min(employeePayroll.loanInstallment, employeePayroll.loanBalance || employeePayroll.loanInstallment))
+  const advanceInstallment = sumCurrency(Math.min(employeePayroll.advanceInstallment, employeePayroll.advanceBalance || employeePayroll.advanceInstallment))
 
   const baseSalary = sumCurrency(attendanceBase + manualSalary + overtimePay)
-  const deductions = sumCurrency(attendanceUnpaidDed + lateDeduction + manualDeductions)
-
-  const bonus =
-    sumCurrency((daysAbsent === 0 ? payroll.perfectAttendanceBonus : 0) + (late === 0 ? payroll.noLateBonus : 0))
-
-  const finalSalary = sumCurrency(baseSalary - deductions + bonus)
+  const grossSalary = sumCurrency(baseSalary + allowancesTotal + incentivePay + attendanceBonus)
+  const deductions = sumCurrency(attendanceUnpaidDed + lateDeduction + manualDeductions + taxDeduction + loanInstallment + advanceInstallment)
+  const finalSalary = sumCurrency(grossSalary - deductions)
 
   return {
     dailyRate: rate,
@@ -320,11 +387,33 @@ export function computeSalary({ dailyRate, allowedHolidays, expectedWorkDays, da
     overtimePay,
     overtimeMinutes,
     overtimeHours,
+    housingAllowance: employeePayroll.housingAllowance,
+    transportAllowance: employeePayroll.transportAllowance,
+    medicalAllowance: employeePayroll.medicalAllowance,
+    allowancesTotal,
+    commissionAmount: employeePayroll.commissionAmount,
+    bonusAmount: employeePayroll.bonusAmount,
+    festivalBonus: employeePayroll.festivalBonus,
+    incentivePay,
+    taxLabel: employeePayroll.taxLabel,
+    taxNumber: employeePayroll.taxNumber,
+    taxEnabled: employeePayroll.taxEnabled,
+    taxMode: employeePayroll.taxMode,
+    taxPercent: employeePayroll.taxPercent,
+    taxFixed: employeePayroll.taxFixed,
+    taxRelief: employeePayroll.taxRelief,
+    taxableIncome,
+    taxDeduction,
+    loanBalance: employeePayroll.loanBalance,
+    loanInstallment,
+    advanceBalance: employeePayroll.advanceBalance,
+    advanceInstallment,
+    grossSalary,
     attendanceUnpaidDed,
     lateDeduction,
     baseSalary,
     deductions,
-    bonus,
+    bonus: attendanceBonus,
     finalSalary,
     manualCount: manualAgg.count || 0,
   }
@@ -1557,7 +1646,7 @@ export async function generateSalaryForMonth({ monthKey, generatedBy }) {
   const payroll = normalizePayrollRules(rules)
   const { month, start, end } = getMonthRange(monthKey)
   const employees = await getEmployees()
-  const activeStaff = employees.filter((e) => (e.role || 'employee') !== 'admin' && e.active !== false)
+  const activeStaff = employees.filter((e) => e.active !== false)
   const [attendance, dailyPayments] = await Promise.all([
     getAttendanceDailyForRange(start, end),
     getDailyPaymentsForMonth(monthKey)
@@ -1608,16 +1697,25 @@ export async function generateSalaryForMonth({ monthKey, generatedBy }) {
       rules: payroll,
       payType,
       roleRate,
+      employeeProfile: emp,
     })
 
     const record = {
       userId: uid,
       employeeName: emp.name || emp.email || uid,
       email: emp.email || '',
+      employeeCode: emp.employeeCode || '',
+      department: emp.department || '',
+      grade: emp.grade || '',
+      employmentType: emp.employmentType || '',
+      bankName: emp.bankName || '',
+      bankAccountNo: emp.bankAccountNo || '',
+      bankBranch: emp.bankBranch || '',
       roleName,
       payType,
       month,
       ...computed,
+      attendanceSource: emp.attendanceSource || payroll.attendanceIntegrationMode || 'manual',
       overtimeMinutes: overtimeAgg.totalOvertimeMinutes,
       overtimeHours: overtimeAgg.totalOvertimeHours,
       overtimePay: overtimeAgg.totalOvertimePay,
@@ -1672,6 +1770,7 @@ export async function getEmployeeSalaryEstimate(userId, monthKey = monthKeyFromD
     lateDays,
     overtimeAgg,
     rules: payroll,
+    employeeProfile: emp || {},
   })
 
   return {
@@ -1958,9 +2057,39 @@ export async function createEmployeeByAdmin({
   email,
   role = 'employee',
   roleName = '',
+  employeeCode = '',
+  grade = '',
+  employmentType = 'permanent',
   active = true,
   dailyRate = 0,
   allowedHolidays,
+  phone = '',
+  address = '',
+  department = '',
+  joinDate = '',
+  status = 'active',
+  attendanceSource = '',
+  bankName = '',
+  bankAccountNo = '',
+  bankBranch = '',
+  taxNumber = '',
+  taxLabel = '',
+  housingAllowance = 0,
+  transportAllowance = 0,
+  medicalAllowance = 0,
+  taxEnabled,
+  taxMode = 'percent',
+  taxPercent = 0,
+  taxFixed = 0,
+  taxRelief = 0,
+  loanBalance = 0,
+  loanInstallment = 0,
+  advanceBalance = 0,
+  advanceInstallment = 0,
+  bonusAmount = 0,
+  festivalBonus = 0,
+  commissionAmount = 0,
+  notes = '',
   createdBy,
 }) {
   if (isFirebaseConfigured) {
@@ -1994,9 +2123,39 @@ export async function createEmployeeByAdmin({
       email: normalizedEmail,
       role,
       roleName: cleanRoleName,
+      employeeCode: String(employeeCode || '').trim(),
+      grade: String(grade || '').trim(),
+      employmentType: String(employmentType || 'permanent').trim(),
       active,
       dailyRate: Number(dailyRate) || 0,
       allowedHolidays: Number(allowedHolidays ?? fallbackHolidays) || 0,
+      phone: String(phone || '').trim(),
+      address: String(address || '').trim(),
+      department: String(department || '').trim(),
+      joinDate: String(joinDate || '').trim(),
+      status: String(status || 'active').trim(),
+      attendanceSource: String(attendanceSource || '').trim(),
+      bankName: String(bankName || '').trim(),
+      bankAccountNo: String(bankAccountNo || '').trim(),
+      bankBranch: String(bankBranch || '').trim(),
+      taxNumber: String(taxNumber || '').trim(),
+      taxLabel: String(taxLabel || '').trim(),
+      housingAllowance: housingAllowance == null || housingAllowance === '' ? null : Number(housingAllowance) || 0,
+      transportAllowance: transportAllowance == null || transportAllowance === '' ? null : Number(transportAllowance) || 0,
+      medicalAllowance: medicalAllowance == null || medicalAllowance === '' ? null : Number(medicalAllowance) || 0,
+      taxEnabled: taxEnabled === true,
+      taxMode: String(taxMode || 'percent').toLowerCase() === 'fixed' ? 'fixed' : 'percent',
+      taxPercent: taxPercent == null || taxPercent === '' ? null : Number(taxPercent) || 0,
+      taxFixed: taxFixed == null || taxFixed === '' ? null : Number(taxFixed) || 0,
+      taxRelief: taxRelief == null || taxRelief === '' ? null : Number(taxRelief) || 0,
+      loanBalance: Number(loanBalance) || 0,
+      loanInstallment: Number(loanInstallment) || 0,
+      advanceBalance: Number(advanceBalance) || 0,
+      advanceInstallment: Number(advanceInstallment) || 0,
+      bonusAmount: Number(bonusAmount) || 0,
+      festivalBonus: Number(festivalBonus) || 0,
+      commissionAmount: Number(commissionAmount) || 0,
+      notes: String(notes || '').trim(),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       createdBy,
@@ -2022,9 +2181,39 @@ export async function createEmployeeByAdmin({
     name: cleanName,
     role,
     roleName: cleanRoleName,
+    employeeCode: String(employeeCode || '').trim(),
+    grade: String(grade || '').trim(),
+    employmentType: String(employmentType || 'permanent').trim(),
     active,
     dailyRate: Number(dailyRate) || 0,
     allowedHolidays: Number(allowedHolidays ?? fallbackHolidays) || 0,
+    phone: String(phone || '').trim(),
+    address: String(address || '').trim(),
+    department: String(department || '').trim(),
+    joinDate: String(joinDate || '').trim(),
+    status: String(status || 'active').trim(),
+    attendanceSource: String(attendanceSource || '').trim(),
+    bankName: String(bankName || '').trim(),
+    bankAccountNo: String(bankAccountNo || '').trim(),
+    bankBranch: String(bankBranch || '').trim(),
+    taxNumber: String(taxNumber || '').trim(),
+    taxLabel: String(taxLabel || '').trim(),
+    housingAllowance: housingAllowance == null || housingAllowance === '' ? null : Number(housingAllowance) || 0,
+    transportAllowance: transportAllowance == null || transportAllowance === '' ? null : Number(transportAllowance) || 0,
+    medicalAllowance: medicalAllowance == null || medicalAllowance === '' ? null : Number(medicalAllowance) || 0,
+    taxEnabled: taxEnabled === true,
+    taxMode: String(taxMode || 'percent').toLowerCase() === 'fixed' ? 'fixed' : 'percent',
+    taxPercent: taxPercent == null || taxPercent === '' ? null : Number(taxPercent) || 0,
+    taxFixed: taxFixed == null || taxFixed === '' ? null : Number(taxFixed) || 0,
+    taxRelief: taxRelief == null || taxRelief === '' ? null : Number(taxRelief) || 0,
+    loanBalance: Number(loanBalance) || 0,
+    loanInstallment: Number(loanInstallment) || 0,
+    advanceBalance: Number(advanceBalance) || 0,
+    advanceInstallment: Number(advanceInstallment) || 0,
+    bonusAmount: Number(bonusAmount) || 0,
+    festivalBonus: Number(festivalBonus) || 0,
+    commissionAmount: Number(commissionAmount) || 0,
+    notes: String(notes || '').trim(),
   })
   writeJson(DEMO_USERS_KEY, users)
 }
@@ -2035,9 +2224,39 @@ export async function updateEmployeeByAdmin({
   email,
   role = 'employee',
   roleName = '',
+  employeeCode = '',
+  grade = '',
+  employmentType = 'permanent',
   active = true,
   dailyRate = 0,
   allowedHolidays,
+  phone = '',
+  address = '',
+  department = '',
+  joinDate = '',
+  status = 'active',
+  attendanceSource = '',
+  bankName = '',
+  bankAccountNo = '',
+  bankBranch = '',
+  taxNumber = '',
+  taxLabel = '',
+  housingAllowance = 0,
+  transportAllowance = 0,
+  medicalAllowance = 0,
+  taxEnabled,
+  taxMode = 'percent',
+  taxPercent = 0,
+  taxFixed = 0,
+  taxRelief = 0,
+  loanBalance = 0,
+  loanInstallment = 0,
+  advanceBalance = 0,
+  advanceInstallment = 0,
+  bonusAmount = 0,
+  festivalBonus = 0,
+  commissionAmount = 0,
+  notes = '',
   updatedBy,
 }) {
   if (!id) {
@@ -2062,9 +2281,39 @@ export async function updateEmployeeByAdmin({
         email: normalizedEmail,
         role,
         roleName: cleanRoleName,
+        employeeCode: String(employeeCode || '').trim(),
+        grade: String(grade || '').trim(),
+        employmentType: String(employmentType || 'permanent').trim(),
         active,
         dailyRate: Number(dailyRate) || 0,
         allowedHolidays: Number(allowedHolidays ?? fallbackHolidays) || 0,
+        phone: String(phone || '').trim(),
+        address: String(address || '').trim(),
+        department: String(department || '').trim(),
+        joinDate: String(joinDate || '').trim(),
+        status: String(status || 'active').trim(),
+        attendanceSource: String(attendanceSource || '').trim(),
+        bankName: String(bankName || '').trim(),
+        bankAccountNo: String(bankAccountNo || '').trim(),
+        bankBranch: String(bankBranch || '').trim(),
+        taxNumber: String(taxNumber || '').trim(),
+        taxLabel: String(taxLabel || '').trim(),
+        housingAllowance: housingAllowance == null || housingAllowance === '' ? null : Number(housingAllowance) || 0,
+        transportAllowance: transportAllowance == null || transportAllowance === '' ? null : Number(transportAllowance) || 0,
+        medicalAllowance: medicalAllowance == null || medicalAllowance === '' ? null : Number(medicalAllowance) || 0,
+        taxEnabled: taxEnabled === true,
+        taxMode: String(taxMode || 'percent').toLowerCase() === 'fixed' ? 'fixed' : 'percent',
+        taxPercent: taxPercent == null || taxPercent === '' ? null : Number(taxPercent) || 0,
+        taxFixed: taxFixed == null || taxFixed === '' ? null : Number(taxFixed) || 0,
+        taxRelief: taxRelief == null || taxRelief === '' ? null : Number(taxRelief) || 0,
+        loanBalance: Number(loanBalance) || 0,
+        loanInstallment: Number(loanInstallment) || 0,
+        advanceBalance: Number(advanceBalance) || 0,
+        advanceInstallment: Number(advanceInstallment) || 0,
+        bonusAmount: Number(bonusAmount) || 0,
+        festivalBonus: Number(festivalBonus) || 0,
+        commissionAmount: Number(commissionAmount) || 0,
+        notes: String(notes || '').trim(),
         updatedAt: serverTimestamp(),
         updatedBy: updatedBy || null,
       },
@@ -2087,9 +2336,39 @@ export async function updateEmployeeByAdmin({
           email: normalizedEmail,
           role,
           roleName: cleanRoleName,
+          employeeCode: String(employeeCode || '').trim(),
+          grade: String(grade || '').trim(),
+          employmentType: String(employmentType || 'permanent').trim(),
           active,
           dailyRate: Number(dailyRate) || 0,
           allowedHolidays: Number(allowedHolidays ?? employee.allowedHolidays ?? DEFAULT_SETTINGS.payrollRules.defaultAllowedHolidays) || 0,
+          phone: String(phone || '').trim(),
+          address: String(address || '').trim(),
+          department: String(department || '').trim(),
+          joinDate: String(joinDate || '').trim(),
+          status: String(status || 'active').trim(),
+          attendanceSource: String(attendanceSource || '').trim(),
+          bankName: String(bankName || '').trim(),
+          bankAccountNo: String(bankAccountNo || '').trim(),
+          bankBranch: String(bankBranch || '').trim(),
+          taxNumber: String(taxNumber || '').trim(),
+          taxLabel: String(taxLabel || '').trim(),
+          housingAllowance: housingAllowance == null || housingAllowance === '' ? null : Number(housingAllowance) || 0,
+          transportAllowance: transportAllowance == null || transportAllowance === '' ? null : Number(transportAllowance) || 0,
+          medicalAllowance: medicalAllowance == null || medicalAllowance === '' ? null : Number(medicalAllowance) || 0,
+          taxEnabled: taxEnabled === true,
+          taxMode: String(taxMode || 'percent').toLowerCase() === 'fixed' ? 'fixed' : 'percent',
+          taxPercent: taxPercent == null || taxPercent === '' ? null : Number(taxPercent) || 0,
+          taxFixed: taxFixed == null || taxFixed === '' ? null : Number(taxFixed) || 0,
+          taxRelief: taxRelief == null || taxRelief === '' ? null : Number(taxRelief) || 0,
+          loanBalance: Number(loanBalance) || 0,
+          loanInstallment: Number(loanInstallment) || 0,
+          advanceBalance: Number(advanceBalance) || 0,
+          advanceInstallment: Number(advanceInstallment) || 0,
+          bonusAmount: Number(bonusAmount) || 0,
+          festivalBonus: Number(festivalBonus) || 0,
+          commissionAmount: Number(commissionAmount) || 0,
+          notes: String(notes || '').trim(),
         }
       : employee,
   )

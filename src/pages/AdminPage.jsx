@@ -48,6 +48,7 @@ import {
   updateDailyPayment,
   updateEmployeeByAdmin,
 } from '../services/attendanceService'
+import { MapPicker } from '../components/MapPicker'
 import {
   KpiCard,
   AttendanceTrendChart,
@@ -255,6 +256,18 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
       latePenaltyFraction: 0.5,
       perfectAttendanceBonus: 0,
       noLateBonus: 0,
+      housingAllowanceDefault: 0,
+      transportAllowanceDefault: 0,
+      medicalAllowanceDefault: 0,
+      taxEnabled: false,
+      taxLabel: 'PAYE',
+      taxMode: 'percent',
+      taxPercent: 0,
+      taxFixed: 0,
+      taxRelief: 0,
+      attendanceIntegrationMode: 'manual',
+      leaveIntegrationMode: 'manual',
+      payslipDeliveryMode: 'portal_pdf',
     },
   })
   const [gpsLat, setGpsLat] = useState(APP_CONFIG.shopGps.lat)
@@ -284,6 +297,7 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
   const [employeeSearch, setEmployeeSearch] = useState('')
   const [employeeSort, setEmployeeSort] = useState('status')
   const [employeeStatusFilter, setEmployeeStatusFilter] = useState('all')
+  const [employeeProfileStatusFilter, setEmployeeProfileStatusFilter] = useState('all')
   const [employeeRoleFilter, setEmployeeRoleFilter] = useState('all')
   const [showInactiveEmployees, setShowInactiveEmployees] = useState(false)
   const [alertsSearch, setAlertsSearch] = useState('')
@@ -331,7 +345,38 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
   const [error, setError] = useState('')
   const [savingEmployee, setSavingEmployee] = useState(false)
   const [editingEmployeeId, setEditingEmployeeId] = useState('')
+  const [showEmployeeForm, setShowEmployeeForm] = useState(false)
   const [newEmpAllowedHolidays, setNewEmpAllowedHolidays] = useState('')
+  const [newEmpPhone, setNewEmpPhone] = useState('')
+  const [newEmpAddress, setNewEmpAddress] = useState('')
+  const [newEmpDepartment, setNewEmpDepartment] = useState('')
+  const [newEmpJoinDate, setNewEmpJoinDate] = useState('')
+  const [newEmpStatus, setNewEmpStatus] = useState('active')
+  const [newEmpEmployeeCode, setNewEmpEmployeeCode] = useState('')
+  const [newEmpGrade, setNewEmpGrade] = useState('')
+  const [newEmpEmploymentType, setNewEmpEmploymentType] = useState('permanent')
+  const [newEmpAttendanceSource, setNewEmpAttendanceSource] = useState('manual')
+  const [newEmpBankName, setNewEmpBankName] = useState('')
+  const [newEmpBankAccountNo, setNewEmpBankAccountNo] = useState('')
+  const [newEmpBankBranch, setNewEmpBankBranch] = useState('')
+  const [newEmpTaxNumber, setNewEmpTaxNumber] = useState('')
+  const [newEmpTaxLabel, setNewEmpTaxLabel] = useState('PAYE')
+  const [newEmpHousingAllowance, setNewEmpHousingAllowance] = useState('')
+  const [newEmpTransportAllowance, setNewEmpTransportAllowance] = useState('')
+  const [newEmpMedicalAllowance, setNewEmpMedicalAllowance] = useState('')
+  const [newEmpTaxEnabled, setNewEmpTaxEnabled] = useState(false)
+  const [newEmpTaxMode, setNewEmpTaxMode] = useState('percent')
+  const [newEmpTaxPercent, setNewEmpTaxPercent] = useState('')
+  const [newEmpTaxFixed, setNewEmpTaxFixed] = useState('')
+  const [newEmpTaxRelief, setNewEmpTaxRelief] = useState('')
+  const [newEmpLoanBalance, setNewEmpLoanBalance] = useState('')
+  const [newEmpLoanInstallment, setNewEmpLoanInstallment] = useState('')
+  const [newEmpAdvanceBalance, setNewEmpAdvanceBalance] = useState('')
+  const [newEmpAdvanceInstallment, setNewEmpAdvanceInstallment] = useState('')
+  const [newEmpBonusAmount, setNewEmpBonusAmount] = useState('')
+  const [newEmpFestivalBonus, setNewEmpFestivalBonus] = useState('')
+  const [newEmpCommissionAmount, setNewEmpCommissionAmount] = useState('')
+  const [newEmpNotes, setNewEmpNotes] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
 
   // QR codes page state
@@ -375,9 +420,9 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
           ...settingsData,
           refreshInterval: Math.max(60, Number(settingsData.refreshInterval || APP_CONFIG.tokenRefreshSeconds)),
         })
-        setGpsLat(settingsData.shopGps?.lat || APP_CONFIG.shopGps.lat)
-        setGpsLng(settingsData.shopGps?.lng || APP_CONFIG.shopGps.lng)
-        setGpsRadius(settingsData.verificationRadiusMeters || APP_CONFIG.verificationRadiusMeters)
+        setGpsLat(settingsData.shopGps?.lat ?? APP_CONFIG.shopGps.lat)
+        setGpsLng(settingsData.shopGps?.lng ?? APP_CONFIG.shopGps.lng)
+        setGpsRadius(settingsData.verificationRadiusMeters ?? APP_CONFIG.verificationRadiusMeters)
       }
     } catch (err) {
       setError(err.message)
@@ -866,7 +911,11 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
     const rows = directory
       .filter((entry) => entry.active !== false)
       .filter((entry) => (showInactiveEmployees ? true : entry.active !== false))
-      .filter((entry) => employeeRoleFilter === 'all' || String(entry.role || 'employee') === employeeRoleFilter)
+      .filter((entry) => {
+        const role = String(entry.role || 'employee')
+        return employeeRoleFilter === 'all' || role === employeeRoleFilter
+      })
+      .filter((entry) => employeeProfileStatusFilter === 'all' || String(entry.status || 'active') === employeeProfileStatusFilter)
       .filter((entry) => {
         const status = String(entry.status || '').toLowerCase()
         const isCheckedIn = Boolean(entry.checkInAt)
@@ -909,7 +958,7 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
     })
 
     return sorted
-  }, [directory, employeeRoleFilter, employeeSearch, employeeSort, employeeStatusFilter, showInactiveEmployees])
+  }, [directory, employeeRoleFilter, employeeSearch, employeeSort, employeeStatusFilter, employeeProfileStatusFilter, showInactiveEmployees])
 
   const pendingApprovalRows = useMemo(() => {
     return directory
@@ -1006,8 +1055,89 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
       .sort((a, b) => String(b.latestTs || '').localeCompare(String(a.latestTs || '')))
   }, [alertsGroupByEmployee, filteredAlerts])
 
+  const resetEmployeeForm = useCallback(() => {
+    setEditingEmployeeId('')
+    setNewEmpName('')
+    setNewEmpEmail('')
+    setNewEmpRole('employee')
+    setNewEmpRoleName('')
+    setNewEmpDailyRate('')
+    setNewEmpAllowedHolidays('')
+    setNewEmpPhone('')
+    setNewEmpAddress('')
+    setNewEmpDepartment('')
+    setNewEmpJoinDate('')
+    setNewEmpStatus('active')
+    setNewEmpEmployeeCode('')
+    setNewEmpGrade('')
+    setNewEmpEmploymentType('permanent')
+    setNewEmpAttendanceSource(settings.payrollRules?.attendanceIntegrationMode || 'manual')
+    setNewEmpBankName('')
+    setNewEmpBankAccountNo('')
+    setNewEmpBankBranch('')
+    setNewEmpTaxNumber('')
+    setNewEmpTaxLabel(settings.payrollRules?.taxLabel || 'PAYE')
+    setNewEmpHousingAllowance('')
+    setNewEmpTransportAllowance('')
+    setNewEmpMedicalAllowance('')
+    setNewEmpTaxEnabled(settings.payrollRules?.taxEnabled === true)
+    setNewEmpTaxMode(settings.payrollRules?.taxMode || 'percent')
+    setNewEmpTaxPercent('')
+    setNewEmpTaxFixed('')
+    setNewEmpTaxRelief('')
+    setNewEmpLoanBalance('')
+    setNewEmpLoanInstallment('')
+    setNewEmpAdvanceBalance('')
+    setNewEmpAdvanceInstallment('')
+    setNewEmpBonusAmount('')
+    setNewEmpFestivalBonus('')
+    setNewEmpCommissionAmount('')
+    setNewEmpNotes('')
+  }, [settings.payrollRules])
+
+  const fillEmployeeForm = useCallback((employee = {}) => {
+    setEditingEmployeeId(employee.uid || employee.id || '')
+    setNewEmpName(employee.name || '')
+    setNewEmpEmail(employee.email || '')
+    setNewEmpRole(employee.role || 'employee')
+    setNewEmpRoleName(employee.roleName || '')
+    setNewEmpDailyRate(String(employee.dailyRate ?? ''))
+    setNewEmpAllowedHolidays(String(employee.allowedHolidays ?? ''))
+    setNewEmpPhone(employee.phone || '')
+    setNewEmpAddress(employee.address || '')
+    setNewEmpDepartment(employee.department || '')
+    setNewEmpJoinDate(employee.joinDate || '')
+    setNewEmpStatus(employee.status || 'active')
+    setNewEmpEmployeeCode(employee.employeeCode || '')
+    setNewEmpGrade(employee.grade || '')
+    setNewEmpEmploymentType(employee.employmentType || 'permanent')
+    setNewEmpAttendanceSource(employee.attendanceSource || settings.payrollRules?.attendanceIntegrationMode || 'manual')
+    setNewEmpBankName(employee.bankName || '')
+    setNewEmpBankAccountNo(employee.bankAccountNo || '')
+    setNewEmpBankBranch(employee.bankBranch || '')
+    setNewEmpTaxNumber(employee.taxNumber || '')
+    setNewEmpTaxLabel(employee.taxLabel || settings.payrollRules?.taxLabel || 'PAYE')
+    setNewEmpHousingAllowance(String(employee.housingAllowance ?? ''))
+    setNewEmpTransportAllowance(String(employee.transportAllowance ?? ''))
+    setNewEmpMedicalAllowance(String(employee.medicalAllowance ?? ''))
+    setNewEmpTaxEnabled(employee.taxEnabled === true)
+    setNewEmpTaxMode(employee.taxMode || settings.payrollRules?.taxMode || 'percent')
+    setNewEmpTaxPercent(String(employee.taxPercent ?? ''))
+    setNewEmpTaxFixed(String(employee.taxFixed ?? ''))
+    setNewEmpTaxRelief(String(employee.taxRelief ?? ''))
+    setNewEmpLoanBalance(String(employee.loanBalance ?? ''))
+    setNewEmpLoanInstallment(String(employee.loanInstallment ?? ''))
+    setNewEmpAdvanceBalance(String(employee.advanceBalance ?? ''))
+    setNewEmpAdvanceInstallment(String(employee.advanceInstallment ?? ''))
+    setNewEmpBonusAmount(String(employee.bonusAmount ?? ''))
+    setNewEmpFestivalBonus(String(employee.festivalBonus ?? ''))
+    setNewEmpCommissionAmount(String(employee.commissionAmount ?? ''))
+    setNewEmpNotes(employee.notes || '')
+  }, [settings.payrollRules])
+
   const createEmployee = async (event) => {
     event.preventDefault()
+    const isEditing = Boolean(editingEmployeeId)
     setSavingEmployee(true)
     setError('')
     setMessage('')
@@ -1019,8 +1149,38 @@ export function AdminPage({ user, pathname, routeSearch, navigate }) {
           email: newEmpEmail,
           role: newEmpRole,
           roleName: newEmpRoleName,
+          employeeCode: newEmpEmployeeCode,
+          grade: newEmpGrade,
+          employmentType: newEmpEmploymentType,
           dailyRate: Number(newEmpDailyRate || 0),
           allowedHolidays: Number(newEmpAllowedHolidays || 0),
+          phone: newEmpPhone,
+          address: newEmpAddress,
+          department: newEmpDepartment,
+          joinDate: newEmpJoinDate,
+          status: newEmpStatus,
+          attendanceSource: newEmpAttendanceSource,
+          bankName: newEmpBankName,
+          bankAccountNo: newEmpBankAccountNo,
+          bankBranch: newEmpBankBranch,
+          taxNumber: newEmpTaxNumber,
+          taxLabel: newEmpTaxLabel,
+          housingAllowance: newEmpHousingAllowance === '' ? null : Number(newEmpHousingAllowance),
+          transportAllowance: newEmpTransportAllowance === '' ? null : Number(newEmpTransportAllowance),
+          medicalAllowance: newEmpMedicalAllowance === '' ? null : Number(newEmpMedicalAllowance),
+          taxEnabled: newEmpTaxEnabled,
+          taxMode: newEmpTaxMode,
+          taxPercent: newEmpTaxPercent === '' ? null : Number(newEmpTaxPercent),
+          taxFixed: newEmpTaxFixed === '' ? null : Number(newEmpTaxFixed),
+          taxRelief: newEmpTaxRelief === '' ? null : Number(newEmpTaxRelief),
+          loanBalance: Number(newEmpLoanBalance || 0),
+          loanInstallment: Number(newEmpLoanInstallment || 0),
+          advanceBalance: Number(newEmpAdvanceBalance || 0),
+          advanceInstallment: Number(newEmpAdvanceInstallment || 0),
+          bonusAmount: Number(newEmpBonusAmount || 0),
+          festivalBonus: Number(newEmpFestivalBonus || 0),
+          commissionAmount: Number(newEmpCommissionAmount || 0),
+          notes: newEmpNotes,
           updatedBy: user.uid || user.id,
         })
       } else {
@@ -1029,19 +1189,44 @@ await createEmployeeByAdmin({
           email: newEmpEmail.trim().toLowerCase(),
           role: newEmpRole,
           roleName: newEmpRoleName,
+          employeeCode: newEmpEmployeeCode,
+          grade: newEmpGrade,
+          employmentType: newEmpEmploymentType,
           dailyRate: Number(newEmpDailyRate || 0),
           allowedHolidays: Number(newEmpAllowedHolidays || 0),
+          phone: newEmpPhone,
+          address: newEmpAddress,
+          department: newEmpDepartment,
+          joinDate: newEmpJoinDate,
+          status: newEmpStatus,
+          attendanceSource: newEmpAttendanceSource,
+          bankName: newEmpBankName,
+          bankAccountNo: newEmpBankAccountNo,
+          bankBranch: newEmpBankBranch,
+          taxNumber: newEmpTaxNumber,
+          taxLabel: newEmpTaxLabel,
+          housingAllowance: newEmpHousingAllowance === '' ? null : Number(newEmpHousingAllowance),
+          transportAllowance: newEmpTransportAllowance === '' ? null : Number(newEmpTransportAllowance),
+          medicalAllowance: newEmpMedicalAllowance === '' ? null : Number(newEmpMedicalAllowance),
+          taxEnabled: newEmpTaxEnabled,
+          taxMode: newEmpTaxMode,
+          taxPercent: newEmpTaxPercent === '' ? null : Number(newEmpTaxPercent),
+          taxFixed: newEmpTaxFixed === '' ? null : Number(newEmpTaxFixed),
+          taxRelief: newEmpTaxRelief === '' ? null : Number(newEmpTaxRelief),
+          loanBalance: Number(newEmpLoanBalance || 0),
+          loanInstallment: Number(newEmpLoanInstallment || 0),
+          advanceBalance: Number(newEmpAdvanceBalance || 0),
+          advanceInstallment: Number(newEmpAdvanceInstallment || 0),
+          bonusAmount: Number(newEmpBonusAmount || 0),
+          festivalBonus: Number(newEmpFestivalBonus || 0),
+          commissionAmount: Number(newEmpCommissionAmount || 0),
+          notes: newEmpNotes,
           createdBy: user.uid || user.id,
         })
       }
-      setNewEmpName('')
-      setNewEmpEmail('')
-      setNewEmpRole('employee')
-      setNewEmpRoleName('')
-      setNewEmpDailyRate('')
-      setNewEmpAllowedHolidays('')
-      setEditingEmployeeId('')
-      setMessage(editingEmployeeId ? 'Employee updated.' : 'Employee access created.')
+      resetEmployeeForm()
+      setShowEmployeeForm(false)
+      setMessage(isEditing ? 'Employee updated.' : 'Employee access created.')
       await loadData()
     } catch (err) {
       setError(err.message)
@@ -1051,23 +1236,18 @@ await createEmployeeByAdmin({
   }
 
   const startEditEmployee = (employee) => {
-    setEditingEmployeeId(employee.uid || employee.id || '')
-    setNewEmpName(employee.name || '')
-    setNewEmpEmail(employee.email || '')
-    setNewEmpRole(employee.role || 'employee')
-    setNewEmpRoleName(employee.roleName || '')
-    setNewEmpDailyRate(String(employee.dailyRate ?? ''))
-    setNewEmpAllowedHolidays(String(employee.allowedHolidays ?? ''))
+    setShowEmployeeForm(true)
+    fillEmployeeForm(employee)
   }
 
   const cancelEditEmployee = () => {
-    setEditingEmployeeId('')
-    setNewEmpName('')
-    setNewEmpEmail('')
-    setNewEmpRole('employee')
-    setNewEmpRoleName('')
-    setNewEmpDailyRate('')
-    setNewEmpAllowedHolidays('')
+    resetEmployeeForm()
+    setShowEmployeeForm(false)
+  }
+
+  const openCreateEmployee = () => {
+    resetEmployeeForm()
+    setShowEmployeeForm(true)
   }
 
   const removeEmployee = async (employee) => {
@@ -1104,9 +1284,33 @@ await createEmployeeByAdmin({
         email: employee.email || '',
         role: employee.role || 'employee',
         roleName: employee.roleName || '',
+        employeeCode: employee.employeeCode || '',
+        grade: employee.grade || '',
+        employmentType: employee.employmentType || 'permanent',
         dailyRate: Number(employee.dailyRate || 0),
         allowedHolidays: Number(employee.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 0),
         active: true,
+        attendanceSource: employee.attendanceSource || settings.payrollRules?.attendanceIntegrationMode || 'manual',
+        bankName: employee.bankName || '',
+        bankAccountNo: employee.bankAccountNo || '',
+        bankBranch: employee.bankBranch || '',
+        taxNumber: employee.taxNumber || '',
+        taxLabel: employee.taxLabel || settings.payrollRules?.taxLabel || 'PAYE',
+        housingAllowance: employee.housingAllowance ?? null,
+        transportAllowance: employee.transportAllowance ?? null,
+        medicalAllowance: employee.medicalAllowance ?? null,
+        taxEnabled: employee.taxEnabled === true,
+        taxMode: employee.taxMode || settings.payrollRules?.taxMode || 'percent',
+        taxPercent: employee.taxPercent ?? null,
+        taxFixed: employee.taxFixed ?? null,
+        taxRelief: employee.taxRelief ?? null,
+        loanBalance: Number(employee.loanBalance || 0),
+        loanInstallment: Number(employee.loanInstallment || 0),
+        advanceBalance: Number(employee.advanceBalance || 0),
+        advanceInstallment: Number(employee.advanceInstallment || 0),
+        bonusAmount: Number(employee.bonusAmount || 0),
+        festivalBonus: Number(employee.festivalBonus || 0),
+        commissionAmount: Number(employee.commissionAmount || 0),
         updatedBy: user.uid || user.id,
       })
       setMessage(`${employee.name || employee.email || 'Employee'} approved.`)
@@ -1448,6 +1652,13 @@ await createEmployeeByAdmin({
       'Attendance Base': r.attendanceBase,
       'Manual Salary': r.manualSalary,
       'Manual Deductions': r.manualDeductions,
+      Allowances: r.allowancesTotal,
+      Incentives: r.incentivePay,
+      'Gross Salary': r.grossSalary,
+      'Tax Label': r.taxLabel || '',
+      'Tax Deduction': r.taxDeduction || 0,
+      'Loan Installment': r.loanInstallment || 0,
+      'Advance Installment': r.advanceInstallment || 0,
       Deductions: r.deductions,
       Bonus: r.bonus,
       'Final Salary': r.finalSalary,
@@ -1621,6 +1832,12 @@ await createEmployeeByAdmin({
       UserId: row.userId,
       Month: row.month,
       BaseSalary: Number(row.baseSalary || 0),
+      Allowances: Number(row.allowancesTotal || 0),
+      Incentives: Number(row.incentivePay || 0),
+      GrossSalary: Number(row.grossSalary || 0),
+      TaxDeduction: Number(row.taxDeduction || 0),
+      LoanInstallment: Number(row.loanInstallment || 0),
+      AdvanceInstallment: Number(row.advanceInstallment || 0),
       Deductions: Number(row.deductions || 0),
       Bonus: Number(row.bonus || 0),
       FinalSalary: Number(row.finalSalary || 0),
@@ -1741,9 +1958,41 @@ await createEmployeeByAdmin({
 
             <div class="summary">
               <div><span class="muted">Final Salary</span><strong>${escapeHtml(Number(selected.finalSalary || 0).toLocaleString())}</strong></div>
-              <div><span class="muted">Attendance Base</span><strong>${escapeHtml(Number(selected.attendanceBase || 0).toLocaleString())}</strong></div>
+              <div><span class="muted">Gross Salary</span><strong>${escapeHtml(Number(selected.grossSalary || 0).toLocaleString())}</strong></div>
               <div><span class="muted">OT Pay</span><strong>${escapeHtml(Number(selected.overtimePay || 0).toLocaleString())}</strong></div>
               <div><span class="muted">Deductions</span><strong>${escapeHtml(Number(selected.deductions || 0).toLocaleString())}</strong></div>
+            </div>
+
+            <div class="box">
+              <h3>Employee & Payment Details</h3>
+              <div class="grid">
+                <p><strong>Employee ID</strong>${escapeHtml(selected.employeeCode || '-')}</p>
+                <p><strong>Department</strong>${escapeHtml(selected.department || '-')}</p>
+                <p><strong>Grade</strong>${escapeHtml(selected.grade || '-')}</p>
+                <p><strong>Employment Type</strong>${escapeHtml(selected.employmentType || '-')}</p>
+                <p><strong>Attendance Source</strong>${escapeHtml(selected.attendanceSource || '-')}</p>
+                <p><strong>Bank</strong>${escapeHtml(selected.bankName || '-')}</p>
+                <p><strong>Account No</strong>${escapeHtml(selected.bankAccountNo || '-')}</p>
+                <p><strong>Branch</strong>${escapeHtml(selected.bankBranch || '-')}</p>
+              </div>
+            </div>
+
+            <div class="box">
+              <h3>Earnings & Deductions</h3>
+              <div class="grid">
+                <p><strong>Attendance Base</strong>${escapeHtml(Number(selected.attendanceBase || 0).toLocaleString())}</p>
+                <p><strong>Manual Salary</strong>${escapeHtml(Number(selected.manualSalary || 0).toLocaleString())}</p>
+                <p><strong>Housing Allowance</strong>${escapeHtml(Number(selected.housingAllowance || 0).toLocaleString())}</p>
+                <p><strong>Transport Allowance</strong>${escapeHtml(Number(selected.transportAllowance || 0).toLocaleString())}</p>
+                <p><strong>Medical Allowance</strong>${escapeHtml(Number(selected.medicalAllowance || 0).toLocaleString())}</p>
+                <p><strong>Incentives</strong>${escapeHtml(Number(selected.incentivePay || 0).toLocaleString())}</p>
+                <p><strong>Attendance Bonus</strong>${escapeHtml(Number(selected.bonus || 0).toLocaleString())}</p>
+                <p><strong>Taxable Income</strong>${escapeHtml(Number(selected.taxableIncome || 0).toLocaleString())}</p>
+                <p><strong>${escapeHtml(selected.taxLabel || 'Tax')}</strong>${escapeHtml(Number(selected.taxDeduction || 0).toLocaleString())}</p>
+                <p><strong>Loan Installment</strong>${escapeHtml(Number(selected.loanInstallment || 0).toLocaleString())}</p>
+                <p><strong>Advance Recovery</strong>${escapeHtml(Number(selected.advanceInstallment || 0).toLocaleString())}</p>
+                <p><strong>Manual Deductions</strong>${escapeHtml(Number(selected.manualDeductions || 0).toLocaleString())}</p>
+              </div>
             </div>
 
             <div class="box">
@@ -2602,14 +2851,32 @@ await createEmployeeByAdmin({
         )}
 
         {section === 'employees' && (
-          <>
-            <section className="card admin-top-row">
+          <div className="employee-page">
+            <section className="card admin-top-row employee-page-hero">
               <div className="employee-hero-copy">
                 <p className="eyebrow">Employee Directory</p>
                 <h1>Today&apos;s check-in status</h1>
                 <p className="muted" style={{ margin: '6px 0 0' }}>
                   Search staff, sort by status, and open a detailed monthly view from any card.
                 </p>
+                <div className="employee-hero-metrics">
+                  <article>
+                    <span>Active employees</span>
+                    <strong>{directorySummary.totalEmployees}</strong>
+                  </article>
+                  <article>
+                    <span>Checked in</span>
+                    <strong>{directorySummary.checkedIn}</strong>
+                  </article>
+                  <article>
+                    <span>Late today</span>
+                    <strong>{directorySummary.late}</strong>
+                  </article>
+                  <article>
+                    <span>Pending approvals</span>
+                    <strong>{pendingApprovalRows.length}</strong>
+                  </article>
+                </div>
               </div>
               <div className="employee-hero-side">
                 <div className="admin-top-actions">
@@ -2620,6 +2887,7 @@ await createEmployeeByAdmin({
                   />
                 </div>
                 <div className="employee-quick-actions">
+                  <button type="button" className="btn-sm" onClick={openCreateEmployee}>Add Employee</button>
                   <button type="button" className="ghost btn-sm" onClick={() => setEmployeeSearch('')}>Clear search</button>
                   <button
                     type="button"
@@ -2643,7 +2911,7 @@ await createEmployeeByAdmin({
               </div>
             </section>
 
-            <section className="stats-grid">
+            <section className="stats-grid employee-stats-grid">
               <article className="card stat-card">
                 <h3>{directorySummary.totalEmployees}</h3>
                 <p>Active employees</p>
@@ -2663,6 +2931,13 @@ await createEmployeeByAdmin({
             </section>
 
             <section className="card employee-toolbar">
+              <div className="employee-toolbar-head">
+                <div>
+                  <h3 style={{ marginBottom: 4 }}>Directory Controls</h3>
+                  <p className="muted" style={{ margin: 0 }}>Refine the list by operational status and employee profile state.</p>
+                </div>
+                <span className="pill neutral">{directoryRows.length} visible</span>
+              </div>
               <div className="employee-toolbar-row">
                 <label>Sort
                   <select value={employeeSort} onChange={(e) => setEmployeeSort(e.target.value)}>
@@ -2682,11 +2957,13 @@ await createEmployeeByAdmin({
                     <option value="inactive">Inactive</option>
                   </select>
                 </label>
-                <label>Role
-                  <select value={employeeRoleFilter} onChange={(e) => setEmployeeRoleFilter(e.target.value)}>
-                    <option value="all">All roles</option>
-                    <option value="employee">Employee</option>
-                    <option value="admin">Admin</option>
+                <label>Profile Status
+                  <select value={employeeProfileStatusFilter} onChange={(e) => setEmployeeProfileStatusFilter(e.target.value)}>
+                    <option value="all">All profiles</option>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                    <option value="on_leave">On Leave</option>
+                    <option value="terminated">Terminated</option>
                   </select>
                 </label>
                 <label className="toggle-inline employee-toggle">
@@ -2703,66 +2980,261 @@ await createEmployeeByAdmin({
               </div>
             </section>
 
-            <section className="card">
-              <div className="row between wrap" style={{ marginBottom: 10 }}>
+            <section className="card employee-setup-card">
+              <div className="row between wrap employee-setup-head" style={{ marginBottom: 10 }}>
                 <div>
-                  <h3 style={{ marginBottom: 4 }}>{editingEmployeeId ? 'Edit Employee' : 'Add Employee'}</h3>
-                  <p className="muted" style={{ margin: 0 }}>Grant access to sign-in and track attendance.</p>
+                  <h3 style={{ marginBottom: 4 }}>Employee Setup</h3>
+                  <p className="muted" style={{ margin: 0 }}>
+                    Open the form only when you need to add a new employee or update an existing one.
+                  </p>
                 </div>
-                {editingEmployeeId ? (
-                  <button type="button" className="ghost btn-sm" onClick={cancelEditEmployee}>Cancel edit</button>
-                ) : null}
-              </div>
-
-              <form className="employee-form" onSubmit={createEmployee}>
-                <div className="employee-form-grid">
-                  <label>Name<input value={newEmpName} onChange={(e) => setNewEmpName(e.target.value)} required /></label>
-                  <label>Email<input type="email" value={newEmpEmail} onChange={(e) => setNewEmpEmail(e.target.value)} required /></label>
-                  <label>Permission Role
-                    <select value={newEmpRole} onChange={(e) => setNewEmpRole(e.target.value)}>
-                      <option value="employee">Employee</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  </label>
-                  <label>Payroll Role (optional)
-                    <select value={newEmpRoleName} onChange={(e) => setNewEmpRoleName(e.target.value)}>
-                      <option value="">No payroll role</option>
-                      {roles.map((role) => (
-                        <option key={role.id || role.roleName} value={role.roleName}>{role.roleName} ({role.payType})</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>Daily Rate
-                    <input
-                      type="number"
-                      min="0"
-                      step="any"
-                      value={newEmpDailyRate}
-                      onChange={(e) => setNewEmpDailyRate(e.target.value)}
-                      placeholder="e.g. 2500"
-                    />
-                  </label>
-                  <label>Paid Holidays
-                    <input
-                      type="number"
-                      min="0"
-                      value={newEmpAllowedHolidays}
-                      onChange={(e) => setNewEmpAllowedHolidays(e.target.value)}
-                      placeholder="e.g. 1"
-                    />
-                  </label>
-                  <div className="employee-form-actions">
-                    <button type="submit" disabled={savingEmployee}>
-                      {savingEmployee ? 'Saving...' : editingEmployeeId ? 'Save Employee' : 'Add Employee'}
+                <div className="row gap">
+                  {showEmployeeForm ? (
+                    <button type="button" className="ghost btn-sm" onClick={cancelEditEmployee}>
+                      {editingEmployeeId ? 'Close edit' : 'Close form'}
                     </button>
+                  ) : (
+                    <button type="button" className="btn-sm" onClick={openCreateEmployee}>
+                      Add Employee
+                    </button>
+                  )}
+                </div>
+              </div>
+              {showEmployeeForm ? (
+                <form className="employee-form" onSubmit={createEmployee}>
+                  <div className="employee-form-shell">
+                    <div className="employee-form-main">
+                      <section className="employee-form-section">
+                        <div className="employee-form-section-head">
+                          <div>
+                            <h4>Identity & Access</h4>
+                            <p className="muted">Core profile details for login, permissions, and directory records.</p>
+                          </div>
+                          <span className="pill neutral">{editingEmployeeId ? 'Editing profile' : 'New profile'}</span>
+                        </div>
+                        <div className="employee-form-grid">
+                          <label>Name<input value={newEmpName} onChange={(e) => setNewEmpName(e.target.value)} required /></label>
+                          <label>Email<input type="email" value={newEmpEmail} onChange={(e) => setNewEmpEmail(e.target.value)} required /></label>
+                          <label>Employee ID
+                            <input value={newEmpEmployeeCode} onChange={(e) => setNewEmpEmployeeCode(e.target.value)} placeholder="e.g. EMP-1024" />
+                          </label>
+                          <label>Grade
+                            <input value={newEmpGrade} onChange={(e) => setNewEmpGrade(e.target.value)} placeholder="e.g. A1, Senior, L2" />
+                          </label>
+                          <label>Permission Role
+                            <select value={newEmpRole} onChange={(e) => setNewEmpRole(e.target.value)}>
+                              <option value="employee">Employee</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                          </label>
+                          <label>Payroll Role
+                            <select value={newEmpRoleName} onChange={(e) => setNewEmpRoleName(e.target.value)}>
+                              <option value="">No payroll role</option>
+                              {roles.map((role) => (
+                                <option key={role.id || role.roleName} value={role.roleName}>{role.roleName} ({role.payType})</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>Phone
+                            <input type="tel" value={newEmpPhone} onChange={(e) => setNewEmpPhone(e.target.value)} placeholder="e.g. +94 77 123 4567" />
+                          </label>
+                          <label>Department
+                            <input value={newEmpDepartment} onChange={(e) => setNewEmpDepartment(e.target.value)} placeholder="e.g. Sales, IT, HR" />
+                          </label>
+                          <label>Join Date
+                            <input type="date" value={newEmpJoinDate} onChange={(e) => setNewEmpJoinDate(e.target.value)} />
+                          </label>
+                          <label>Status
+                            <select value={newEmpStatus} onChange={(e) => setNewEmpStatus(e.target.value)}>
+                              <option value="active">Active</option>
+                              <option value="contract">Contract</option>
+                              <option value="resigned">Resigned</option>
+                              <option value="inactive">Inactive</option>
+                              <option value="on_leave">On Leave</option>
+                              <option value="terminated">Terminated</option>
+                            </select>
+                          </label>
+                          <label className="employee-form-field span-2">Address
+                            <textarea
+                              value={newEmpAddress}
+                              onChange={(e) => setNewEmpAddress(e.target.value)}
+                              placeholder="Full address"
+                              rows="2"
+                            />
+                          </label>
+                          <label className="employee-form-field span-2">Notes
+                            <textarea
+                              value={newEmpNotes}
+                              onChange={(e) => setNewEmpNotes(e.target.value)}
+                              placeholder="Additional notes"
+                              rows="2"
+                            />
+                          </label>
+                        </div>
+                      </section>
+
+                      <section className="employee-form-section">
+                        <div className="employee-form-section-head">
+                          <div>
+                            <h4>Work Setup</h4>
+                            <p className="muted">Attendance source, employment type, and the base payroll setup.</p>
+                          </div>
+                        </div>
+                        <div className="employee-form-grid">
+                          <label>Daily Rate
+                            <input type="number" min="0" step="any" value={newEmpDailyRate} onChange={(e) => setNewEmpDailyRate(e.target.value)} placeholder="e.g. 2500" />
+                          </label>
+                          <label>Paid Holidays
+                            <input type="number" min="0" value={newEmpAllowedHolidays} onChange={(e) => setNewEmpAllowedHolidays(e.target.value)} placeholder="e.g. 1" />
+                          </label>
+                          <label>Employment Type
+                            <select value={newEmpEmploymentType} onChange={(e) => setNewEmpEmploymentType(e.target.value)}>
+                              <option value="permanent">Permanent</option>
+                              <option value="contract">Contract</option>
+                              <option value="temporary">Temporary</option>
+                              <option value="intern">Intern</option>
+                            </select>
+                          </label>
+                          <label>Attendance Source
+                            <select value={newEmpAttendanceSource} onChange={(e) => setNewEmpAttendanceSource(e.target.value)}>
+                              <option value="manual">Manual</option>
+                              <option value="biometric">Biometric</option>
+                              <option value="integrated">Integrated Device/API</option>
+                            </select>
+                          </label>
+                        </div>
+                      </section>
+
+                      <section className="employee-form-section">
+                        <div className="employee-form-section-head">
+                          <div>
+                            <h4>Compensation & Recoveries</h4>
+                            <p className="muted">Allowances, incentives, loans, and salary advance deductions.</p>
+                          </div>
+                        </div>
+                        <div className="employee-form-grid">
+                          <label>Housing Allowance
+                            <input type="number" min="0" step="any" value={newEmpHousingAllowance} onChange={(e) => setNewEmpHousingAllowance(e.target.value)} placeholder="Default from settings if empty" />
+                          </label>
+                          <label>Transport Allowance
+                            <input type="number" min="0" step="any" value={newEmpTransportAllowance} onChange={(e) => setNewEmpTransportAllowance(e.target.value)} placeholder="Default from settings if empty" />
+                          </label>
+                          <label>Medical Allowance
+                            <input type="number" min="0" step="any" value={newEmpMedicalAllowance} onChange={(e) => setNewEmpMedicalAllowance(e.target.value)} placeholder="Default from settings if empty" />
+                          </label>
+                          <label>Performance Bonus
+                            <input type="number" min="0" step="any" value={newEmpBonusAmount} onChange={(e) => setNewEmpBonusAmount(e.target.value)} placeholder="This month / recurring" />
+                          </label>
+                          <label>Festival Bonus
+                            <input type="number" min="0" step="any" value={newEmpFestivalBonus} onChange={(e) => setNewEmpFestivalBonus(e.target.value)} placeholder="One-time or seasonal" />
+                          </label>
+                          <label>Commission
+                            <input type="number" min="0" step="any" value={newEmpCommissionAmount} onChange={(e) => setNewEmpCommissionAmount(e.target.value)} placeholder="Sales or incentive pay" />
+                          </label>
+                          <label>Loan Balance
+                            <input type="number" min="0" step="any" value={newEmpLoanBalance} onChange={(e) => setNewEmpLoanBalance(e.target.value)} placeholder="Outstanding employee loan" />
+                          </label>
+                          <label>Loan Installment
+                            <input type="number" min="0" step="any" value={newEmpLoanInstallment} onChange={(e) => setNewEmpLoanInstallment(e.target.value)} placeholder="Monthly deduction" />
+                          </label>
+                          <label>Advance Balance
+                            <input type="number" min="0" step="any" value={newEmpAdvanceBalance} onChange={(e) => setNewEmpAdvanceBalance(e.target.value)} placeholder="Outstanding salary advance" />
+                          </label>
+                          <label>Advance Installment
+                            <input type="number" min="0" step="any" value={newEmpAdvanceInstallment} onChange={(e) => setNewEmpAdvanceInstallment(e.target.value)} placeholder="Monthly recovery" />
+                          </label>
+                        </div>
+                      </section>
+
+                      <section className="employee-form-section">
+                        <div className="employee-form-section-head">
+                          <div>
+                            <h4>Banking & Tax</h4>
+                            <p className="muted">Payout destination and statutory deduction settings.</p>
+                          </div>
+                        </div>
+                        <div className="employee-form-grid">
+                          <label>Bank Name
+                            <input value={newEmpBankName} onChange={(e) => setNewEmpBankName(e.target.value)} placeholder="Bank for salary transfer" />
+                          </label>
+                          <label>Bank Account No
+                            <input value={newEmpBankAccountNo} onChange={(e) => setNewEmpBankAccountNo(e.target.value)} placeholder="Masked or full account number" />
+                          </label>
+                          <label>Bank Branch
+                            <input value={newEmpBankBranch} onChange={(e) => setNewEmpBankBranch(e.target.value)} placeholder="Branch / routing reference" />
+                          </label>
+                          <label>Tax Label
+                            <input value={newEmpTaxLabel} onChange={(e) => setNewEmpTaxLabel(e.target.value)} placeholder="e.g. PAYE" />
+                          </label>
+                          <label>Tax Number
+                            <input value={newEmpTaxNumber} onChange={(e) => setNewEmpTaxNumber(e.target.value)} placeholder="TIN / tax reference" />
+                          </label>
+                          <label>Tax Type
+                            <select value={newEmpTaxMode} onChange={(e) => setNewEmpTaxMode(e.target.value)}>
+                              <option value="percent">Percentage</option>
+                              <option value="fixed">Fixed Amount</option>
+                            </select>
+                          </label>
+                          <label>Tax Percent
+                            <input type="number" min="0" step="0.01" value={newEmpTaxPercent} onChange={(e) => setNewEmpTaxPercent(e.target.value)} placeholder="Applied to taxable income" />
+                          </label>
+                          <label>Fixed Tax
+                            <input type="number" min="0" step="any" value={newEmpTaxFixed} onChange={(e) => setNewEmpTaxFixed(e.target.value)} placeholder="Used when tax type is fixed" />
+                          </label>
+                          <label>Tax Relief
+                            <input type="number" min="0" step="any" value={newEmpTaxRelief} onChange={(e) => setNewEmpTaxRelief(e.target.value)} placeholder="Relief before tax calculation" />
+                          </label>
+                          <label className="employee-form-toggle">
+                            <span>Enable Tax Deduction</span>
+                            <input type="checkbox" checked={newEmpTaxEnabled} onChange={(e) => setNewEmpTaxEnabled(e.target.checked)} />
+                          </label>
+                        </div>
+                      </section>
+                    </div>
+
+                    <aside className="employee-form-sidebar">
+                      <section className="employee-form-summary">
+                        <h4>Setup Snapshot</h4>
+                        <div className="employee-summary-list">
+                          <p><span>Profile</span><strong>{editingEmployeeId ? 'Updating existing employee' : 'Creating new employee'}</strong></p>
+                          <p><span>Attendance</span><strong>{newEmpAttendanceSource || 'Manual'}</strong></p>
+                          <p><span>Employment</span><strong>{newEmpEmploymentType || 'Permanent'}</strong></p>
+                          <p><span>Status</span><strong>{newEmpStatus || 'Active'}</strong></p>
+                          <p><span>Payroll role</span><strong>{newEmpRoleName || 'No payroll role'}</strong></p>
+                          <p><span>Tax</span><strong>{newEmpTaxEnabled ? `${newEmpTaxLabel || 'Tax'} enabled` : 'Not enabled'}</strong></p>
+                        </div>
+                        <div className="inline-pills employee-form-pills">
+                          <span className="pill neutral">{newEmpDepartment || 'No department'}</span>
+                          <span className="pill neutral">{newEmpGrade || 'No grade'}</span>
+                          <span className="pill neutral">{newEmpRole === 'admin' ? 'Admin access' : 'Employee access'}</span>
+                        </div>
+                      </section>
+
+                      <div className="employee-form-actions">
+                        <button type="submit" disabled={savingEmployee}>
+                          {savingEmployee ? 'Saving...' : editingEmployeeId ? 'Save Employee' : 'Add Employee'}
+                        </button>
+                        <p className="muted employee-form-help">
+                          Start with identity and work setup. Banking, tax, and recovery fields can be completed progressively.
+                        </p>
+                      </div>
+                    </aside>
+                  </div>
+                </form>
+              ) : (
+                <div className="employee-form-collapsed">
+                  <div className="employee-form-collapsed-copy">
+                    <p className="muted" style={{ margin: 0 }}>
+                      Use <strong>Add Employee</strong> to open the form, or click <strong>Edit</strong> on any employee record.
+                    </p>
                   </div>
                 </div>
-              </form>
+              )}
             </section>
 
             {pendingApprovalRows.length > 0 && (
-              <section className="card">
-                <div className="row between wrap" style={{ marginBottom: 10 }}>
+              <section className="card employee-section-card">
+                <div className="row between wrap employee-section-head" style={{ marginBottom: 10 }}>
                   <div>
                     <h3 style={{ marginBottom: 4 }}>Pending Approvals</h3>
                     <p className="muted" style={{ margin: 0 }}>New sign-ins waiting for admin approval.</p>
@@ -2771,7 +3243,7 @@ await createEmployeeByAdmin({
                 </div>
                 <section className="employee-grid">
                   {pendingApprovalRows.map((item) => (
-                    <article key={`pending-${item.uid || item.id || item.email}`} className="card emp-card inactive">
+                    <article key={`pending-${item.uid || item.id || item.email}`} className="card emp-card inactive pending">
                       <div className="emp-card-head">
                         <div className="emp-avatar inactive">{(item.name || 'E').slice(0, 2).toUpperCase()}</div>
                         <div className="emp-card-title">
@@ -2795,9 +3267,17 @@ await createEmployeeByAdmin({
               </section>
             )}
 
-            <section className="employee-grid">
-              {directoryRows.map((item) => (
-                <article key={item.uid || item.email || item.name} className="card emp-card">
+            <section className="employee-section-card">
+              <div className="row between wrap employee-section-head">
+                <div>
+                  <h3 style={{ marginBottom: 4 }}>Employee Directory</h3>
+                  <p className="muted" style={{ margin: 0 }}>Browse records, open monthly detail, or jump into updates from each card.</p>
+                </div>
+                <span className="pill neutral">{directoryRows.length} employees</span>
+              </div>
+              <section className="employee-grid">
+                {directoryRows.map((item) => (
+                  <article key={item.uid || item.email || item.name} className="card emp-card">
                   <div className="emp-card-head">
                     <div className={`emp-avatar ${item.active === false ? 'inactive' : ''}`}>{(item.name || 'E').slice(0, 2).toUpperCase()}</div>
                     <div className="emp-card-title">
@@ -2808,6 +3288,8 @@ await createEmployeeByAdmin({
                   </div>
                   <div className="emp-meta">
                     <span className="muted">{item.roleName ? `Payroll role: ${item.roleName}` : 'Payroll role: None'}</span>
+                    <span className="muted">{item.department ? `Dept: ${item.department}` : ''}</span>
+                    <span className="muted">{item.phone ? `Phone: ${item.phone}` : ''}</span>
                     <span className="muted">{item.checkInAt ? `In ${formatClock(item.checkInAt)}` : 'No check-in yet'}</span>
                     <span className="muted">{item.checkOutAt ? `Out ${formatClock(item.checkOutAt)}` : 'No check-out yet'}</span>
                     <span className="muted">Rate {Number(item.dailyRate || 0).toLocaleString()} | Holidays {Number(item.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</span>
@@ -2833,11 +3315,17 @@ await createEmployeeByAdmin({
                     </button>
                     <button type="button" className="ghost danger" onClick={() => removeEmployee(item)}>Remove</button>
                   </div>
-                </article>
-              ))}
-              {!directoryRows.length && <section className="card"><p className="muted">No employees found.</p></section>}
+                  </article>
+                ))}
+                {!directoryRows.length && (
+                  <section className="card employee-empty-state">
+                    <h4 style={{ marginBottom: 6 }}>No employees match these filters</h4>
+                    <p className="muted" style={{ margin: 0 }}>Try changing the search, profile filters, or inactive toggle to broaden the results.</p>
+                  </section>
+                )}
+              </section>
             </section>
-          </>
+          </div>
         )}
 
         {section === 'roles' && (
@@ -3144,6 +3632,24 @@ await createEmployeeByAdmin({
                         sortable: true
                       },
                       {
+                        key: 'allowancesTotal',
+                        header: 'Allowances',
+                        render: (row) => Number(row.allowancesTotal || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'incentivePay',
+                        header: 'Incentives',
+                        render: (row) => Number(row.incentivePay || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
+                        key: 'taxDeduction',
+                        header: 'Tax',
+                        render: (row) => Number(row.taxDeduction || 0).toLocaleString(),
+                        sortable: true
+                      },
+                      {
                         key: 'deductions',
                         header: 'Deductions',
                         render: (row) => Number(row.deductions || 0).toLocaleString(),
@@ -3296,11 +3802,17 @@ await createEmployeeByAdmin({
                             <p><strong>OT Hours:</strong> {Number(selected.overtimeHours || 0).toLocaleString()}</p>
                             <p><strong>OT Pay:</strong> {Number(selected.overtimePay || 0).toLocaleString()}</p>
                             <p><strong>Total Base:</strong> {Number(selected.baseSalary || 0).toLocaleString()}</p>
+                            <p><strong>Allowances:</strong> {Number(selected.allowancesTotal || 0).toLocaleString()}</p>
+                            <p><strong>Incentives:</strong> {Number(selected.incentivePay || 0).toLocaleString()}</p>
+                            <p><strong>Gross Salary:</strong> {Number(selected.grossSalary || 0).toLocaleString()}</p>
                             <p><strong>Unpaid Ded:</strong> {Number(selected.attendanceUnpaidDed || 0).toLocaleString()}</p>
                             <p><strong>Late Ded:</strong> {Number(selected.lateDeduction || 0).toLocaleString()}</p>
                             <p><strong>Manual Ded:</strong> {Number(selected.manualDeductions || 0).toLocaleString()}</p>
+                            <p><strong>{selected.taxLabel || 'Tax'}:</strong> {Number(selected.taxDeduction || 0).toLocaleString()}</p>
+                            <p><strong>Loan Ded:</strong> {Number(selected.loanInstallment || 0).toLocaleString()}</p>
+                            <p><strong>Advance Ded:</strong> {Number(selected.advanceInstallment || 0).toLocaleString()}</p>
                             <p><strong>Total Ded:</strong> {Number(selected.deductions || 0).toLocaleString()}</p>
-                            <p><strong>Bonus:</strong> {Number(selected.bonus || 0).toLocaleString()}</p>
+                            <p><strong>Attendance Bonus:</strong> {Number(selected.bonus || 0).toLocaleString()}</p>
                             <p><strong>Final:</strong> {Number(selected.finalSalary || 0).toLocaleString()}</p>
                           </div>
                         </article>
@@ -4163,30 +4675,66 @@ await createEmployeeByAdmin({
         )}
 
         {section === 'settings' && (
-          <>
-            <section className="card admin-top-row">
-              <div>
+          <div className="settings-page">
+            <section className="card admin-top-row settings-hero">
+              <div className="settings-hero-copy">
                 <p className="eyebrow">System Settings</p>
-                <h1>Work hours, grace period, rules</h1>
+                <h1>Attendance, payroll, and location rules</h1>
+                <p className="muted" style={{ margin: '6px 0 0' }}>
+                  Manage work hours, GPS verification, payroll defaults, tax behavior, and weekly schedule rules from one place.
+                </p>
+                <div className="settings-kpis">
+                  <article>
+                    <span>Default day</span>
+                    <strong>{settings.workStart} - {settings.workEnd}</strong>
+                  </article>
+                  <article>
+                    <span>Grace period</span>
+                    <strong>{Number(settings.graceMins || 0)} min</strong>
+                  </article>
+                  <article>
+                    <span>GPS radius</span>
+                    <strong>{Number(gpsRadius || 0)} m</strong>
+                  </article>
+                  <article>
+                    <span>Expected workdays</span>
+                    <strong>{Number(settings.payrollRules?.expectedWorkDays ?? 26)}</strong>
+                  </article>
+                </div>
+              </div>
+              <div className="settings-hero-actions">
+                <button onClick={saveSettings} disabled={savingSettings}>
+                  {savingSettings ? 'Saving...' : 'Save Changes'}
+                </button>
+                <p className="muted" style={{ margin: 0 }}>
+                  Review schedule, payroll, and GPS settings before saving.
+                </p>
               </div>
             </section>
 
-            <section className="grid two">
-              <article className="card">
-                <h3>Default Work Hours</h3>
-                <div className="stack">
+            <section className="settings-overview-grid">
+              <article className="card settings-panel">
+                <div className="settings-card-head">
+                  <div>
+                    <h3 style={{ marginBottom: 4 }}>Default Work Hours</h3>
+                    <p className="muted" style={{ margin: 0 }}>Used as fallback when a day does not override the default schedule.</p>
+                  </div>
+                </div>
+                <div className="settings-field-grid">
                   <label>Work Start Time<input type="time" value={settings.workStart} onChange={(e) => setSettings((old) => ({ ...old, workStart: e.target.value }))} /></label>
                   <label>Work End Time<input type="time" value={settings.workEnd} onChange={(e) => setSettings((old) => ({ ...old, workEnd: e.target.value }))} /></label>
                   <label>Grace Period (minutes)<input type="number" min="0" value={settings.graceMins} onChange={(e) => setSettings((old) => ({ ...old, graceMins: Number(e.target.value) }))} /></label>
                 </div>
-                <p className="muted" style={{ margin: '10px 0 0' }}>
-                  Used as a fallback. Weekly schedule overrides this per day.
-                </p>
               </article>
 
-              <article className="card">
-                <h3>Notifications & Rules</h3>
-                <div className="settings-toggles">
+              <article className="card settings-panel">
+                <div className="settings-card-head">
+                  <div>
+                    <h3 style={{ marginBottom: 4 }}>Notifications & Rules</h3>
+                    <p className="muted" style={{ margin: 0 }}>Enable attendance safeguards and employee-facing preferences.</p>
+                  </div>
+                </div>
+                <div className="settings-toggles settings-toggles-spacious">
                   <label className="toggle-row"><span>Late Arrival Alerts</span><input type="checkbox" checked={settings.lateAlerts} onChange={(e) => setSettings((old) => ({ ...old, lateAlerts: e.target.checked }))} /></label>
                   <label className="toggle-row"><span>GPS Verification</span><input type="checkbox" checked={settings.gpsVerify} onChange={(e) => setSettings((old) => ({ ...old, gpsVerify: e.target.checked }))} /></label>
                   <label className="toggle-row"><span>Duplicate Prevention</span><input type="checkbox" checked={settings.dupePrevention} onChange={(e) => setSettings((old) => ({ ...old, dupePrevention: e.target.checked }))} /></label>
@@ -4195,13 +4743,13 @@ await createEmployeeByAdmin({
               </article>
             </section>
 
-            <section className="card">
-              <div className="row between wrap" style={{ marginBottom: 10 }}>
+            <section className="card settings-panel settings-schedule-card">
+              <div className="row between wrap settings-card-head" style={{ marginBottom: 10 }}>
                 <div>
                   <h3 style={{ marginBottom: 4 }}>Weekly Schedule</h3>
                   <p className="muted" style={{ margin: 0 }}>Set different work hours per day and decide if check-in / check-out is allowed.</p>
                 </div>
-                <div className="row gap wrap">
+                <div className="row gap wrap settings-schedule-actions">
                   <button
                     type="button"
                     className="ghost btn-sm"
@@ -4420,15 +4968,20 @@ await createEmployeeByAdmin({
                 />
               </div>
 
-              <p className="muted" style={{ margin: '10px 0 0' }}>
+              <p className="muted settings-helper" style={{ margin: '10px 0 0' }}>
                 Disabled days block employee scans and prevent late alerts. You can also disable only check-in or only check-out.
               </p>
             </section>
 
-            <section className="grid two">
-              <article className="card">
-                <h3>Payroll Rules</h3>
-                <div className="stack">
+            <section className="settings-overview-grid">
+              <article className="card settings-panel">
+                <div className="settings-card-head">
+                  <div>
+                    <h3 style={{ marginBottom: 4 }}>Payroll Rules</h3>
+                    <p className="muted" style={{ margin: 0 }}>Configure default salary behavior, leave handling, and overtime calculations.</p>
+                  </div>
+                </div>
+                <div className="settings-field-grid">
                   <label>Expected work days / month
                     <input
                       type="number"
@@ -4451,6 +5004,48 @@ await createEmployeeByAdmin({
                         setSettings((old) => ({
                           ...old,
                           payrollRules: { ...(old.payrollRules || {}), defaultAllowedHolidays: Number(e.target.value) },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Default housing allowance
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={settings.payrollRules?.housingAllowanceDefault ?? 0}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), housingAllowanceDefault: Number(e.target.value) },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Default transport allowance
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={settings.payrollRules?.transportAllowanceDefault ?? 0}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), transportAllowanceDefault: Number(e.target.value) },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Default medical allowance
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={settings.payrollRules?.medicalAllowanceDefault ?? 0}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), medicalAllowanceDefault: Number(e.target.value) },
                         }))
                       }
                     />
@@ -4550,17 +5145,22 @@ await createEmployeeByAdmin({
                     />
                   </label>
                 </div>
-                <p className="muted" style={{ margin: '10px 0 0' }}>
+                <p className="muted settings-helper" style={{ margin: '10px 0 0' }}>
                   Example: `0.5` means each late day deducts half a day rate.
                 </p>
-                <p className="muted" style={{ margin: '8px 0 0' }}>
+                <p className="muted settings-helper" style={{ margin: '8px 0 0' }}>
                   Overtime applies after the scheduled end time, with a seasonal rate for Christmas and New Year if configured.
                 </p>
               </article>
 
-              <article className="card">
-                <h3>Bonus Rules</h3>
-                <div className="stack">
+              <article className="card settings-panel">
+                <div className="settings-card-head">
+                  <div>
+                    <h3 style={{ marginBottom: 4 }}>Bonuses, Tax & Integrations</h3>
+                    <p className="muted" style={{ margin: 0 }}>Control fixed bonuses, tax defaults, and attendance or leave data sources.</p>
+                  </div>
+                </div>
+                <div className="settings-field-grid">
                   <label>Perfect attendance bonus (fixed)
                     <input
                       type="number"
@@ -4589,77 +5189,206 @@ await createEmployeeByAdmin({
                       }
                     />
                   </label>
+                  <label className="toggle-row">
+                    <span>Enable default tax deduction</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.payrollRules?.taxEnabled === true}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), taxEnabled: e.target.checked },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Tax Label
+                    <input
+                      value={settings.payrollRules?.taxLabel ?? 'PAYE'}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), taxLabel: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Tax Mode
+                    <select
+                      value={settings.payrollRules?.taxMode ?? 'percent'}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), taxMode: e.target.value },
+                        }))
+                      }
+                    >
+                      <option value="percent">Percentage</option>
+                      <option value="fixed">Fixed Amount</option>
+                    </select>
+                  </label>
+                  <label>Default Tax Percent
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={settings.payrollRules?.taxPercent ?? 0}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), taxPercent: Number(e.target.value) },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Default Fixed Tax
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={settings.payrollRules?.taxFixed ?? 0}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), taxFixed: Number(e.target.value) },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Default Tax Relief
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={settings.payrollRules?.taxRelief ?? 0}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), taxRelief: Number(e.target.value) },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>Attendance Integration
+                    <select
+                      value={settings.payrollRules?.attendanceIntegrationMode ?? 'manual'}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), attendanceIntegrationMode: e.target.value },
+                        }))
+                      }
+                    >
+                      <option value="manual">Manual Entry</option>
+                      <option value="biometric">Biometric Device</option>
+                      <option value="integrated">External API / Import</option>
+                    </select>
+                  </label>
+                  <label>Leave Integration
+                    <select
+                      value={settings.payrollRules?.leaveIntegrationMode ?? 'manual'}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), leaveIntegrationMode: e.target.value },
+                        }))
+                      }
+                    >
+                      <option value="manual">Manual Entry</option>
+                      <option value="hris">HRIS / Leave Module</option>
+                      <option value="integrated">External API / Import</option>
+                    </select>
+                  </label>
+                  <label>Payslip Delivery
+                    <select
+                      value={settings.payrollRules?.payslipDeliveryMode ?? 'portal_pdf'}
+                      onChange={(e) =>
+                        setSettings((old) => ({
+                          ...old,
+                          payrollRules: { ...(old.payrollRules || {}), payslipDeliveryMode: e.target.value },
+                        }))
+                      }
+                    >
+                      <option value="portal_pdf">Portal + PDF</option>
+                      <option value="email_pdf">Email PDF</option>
+                      <option value="portal_only">Portal Only</option>
+                    </select>
+                  </label>
                 </div>
-                <p className="muted" style={{ margin: '10px 0 0' }}>
-                  Bonuses apply when salary is generated for the month.
+                <p className="muted settings-helper" style={{ margin: '10px 0 0' }}>
+                  Attendance bonuses, tax defaults, and integration metadata apply when salary is generated for the month.
                 </p>
               </article>
             </section>
 
-            <section className="grid two">
-              <article className="card">
-                <h3>Shop GPS Location</h3>
-                <div className="stack">
+            <section className="settings-overview-grid">
+              <article className="card settings-panel settings-gps-panel">
+                <div className="settings-card-head">
+                  <div>
+                    <h3 style={{ marginBottom: 4 }}>Shop GPS Location</h3>
+                    <p className="muted" style={{ margin: 0 }}>Set the verification point and service radius used for location-based attendance checks.</p>
+                  </div>
+                </div>
+                <div className="settings-gps-grid">
                   <label>Latitude<input type="number" step="any" value={gpsLat} onChange={(e) => {
                     setGpsLat(Number(e.target.value))
                   }} /></label>
                   <label>Longitude<input type="number" step="any" value={gpsLng} onChange={(e) => {
                     setGpsLng(Number(e.target.value))
                   }} /></label>
-                  <label>Verification Radius (m)<input type="range" min="50" max="500" value={gpsRadius} onChange={(e) => setGpsRadius(Number(e.target.value))} /><span>{gpsRadius}m</span></label>
-                  <div className="map-preview">
-                    {Number.isFinite(gpsLat) && Number.isFinite(gpsLng) ? (
-                      <iframe
-                        title="Shop location map"
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
-                        src={`https://www.google.com/maps?q=${encodeURIComponent(`${gpsLat},${gpsLng}`)}&z=17&output=embed`}
-                      />
-                    ) : (
-                      <div className="map-empty">
-                        <p className="muted" style={{ margin: 0 }}>Enter valid latitude/longitude to preview the map.</p>
-                      </div>
-                    )}
-                  </div>
-                  <div className="row gap wrap">
-                    <button
-                      type="button"
+                  <label className="settings-field-wide">Verification Radius (m)<input type="range" min="50" max="500" value={gpsRadius} onChange={(e) => setGpsRadius(Number(e.target.value))} /><span>{gpsRadius}m</span></label>
+                </div>
+                <div className="settings-map-wrap">
+                  <MapPicker
+                    lat={gpsLat}
+                    lng={gpsLng}
+                    radius={gpsRadius}
+                    onLocationSelect={(newLat, newLng) => {
+                      setGpsLat(newLat)
+                      setGpsLng(newLng)
+                    }}
+                    className="map-preview"
+                  />
+                </div>
+                <div className="row gap wrap settings-gps-actions">
+                  <button
+                    type="button"
+                    className="ghost btn-sm"
+                    disabled={locatingGps}
+                    onClick={() => {
+                      if (!navigator.geolocation) {
+                        setError('Geolocation is not available in this browser.')
+                        return
+                      }
+                      setLocatingGps(true)
+                      navigator.geolocation.getCurrentPosition(
+                        (pos) => {
+                          setGpsLat(pos.coords.latitude)
+                          setGpsLng(pos.coords.longitude)
+                          setMessage('Location captured. Review then Save GPS.')
+                          setLocatingGps(false)
+                        },
+                        () => {
+                          setError('Could not get your location. Please allow location permission and try again.')
+                          setLocatingGps(false)
+                        },
+                        { enableHighAccuracy: true, timeout: 12000 },
+                      )
+                    }}
+                  >
+                    {locatingGps ? 'Locating...' : 'Use my location'}
+                  </button>
+                  {Number.isFinite(gpsLat) && Number.isFinite(gpsLng) && (
+                    <a
                       className="ghost btn-sm"
-                      disabled={locatingGps}
-                      onClick={() => {
-                        if (!navigator.geolocation) {
-                          setError('Geolocation is not available in this browser.')
-                          return
-                        }
-                        setLocatingGps(true)
-                        navigator.geolocation.getCurrentPosition(
-                          (pos) => {
-                            setGpsLat(pos.coords.latitude)
-                            setGpsLng(pos.coords.longitude)
-                            setMessage('Location captured. Review then Save GPS.')
-                            setLocatingGps(false)
-                          },
-                          () => {
-                            setError('Could not get your location. Please allow location permission and try again.')
-                            setLocatingGps(false)
-                          },
-                          { enableHighAccuracy: true, timeout: 12000 },
-                        )
-                      }}
+                      href={`https://www.google.com/maps?q=${encodeURIComponent(`${gpsLat},${gpsLng}`)}`}
+                      target="_blank"
+                      rel="noreferrer"
                     >
-                      {locatingGps ? 'Locating...' : 'Use my location'}
-                    </button>
-                    {Number.isFinite(gpsLat) && Number.isFinite(gpsLng) && (
-                      <a
-                        className="ghost btn-sm"
-                        href={`https://www.google.com/maps?q=${encodeURIComponent(`${gpsLat},${gpsLng}`)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open in Google Maps
-                      </a>
-                    )}
-                    <button onClick={async () => {
+                      Open in Google Maps
+                    </a>
+                  )}
+                  <button onClick={async () => {
                     setSavingGps(true)
                     try {
                       await setShopGps({lat: gpsLat, lng: gpsLng}, gpsRadius)
@@ -4671,16 +5400,27 @@ await createEmployeeByAdmin({
                       setSavingGps(false)
                     }
                   }} disabled={savingGps}> {savingGps ? 'Saving...' : 'Save GPS'} </button>
+                </div>
+                <p className="muted settings-helper" style={{ marginTop: '8px' }}>Map preview updates instantly. Save to apply for GPS verification.</p>
+              </article>
+
+              <article className="card settings-panel settings-save-panel">
+                <div className="settings-card-head">
+                  <div>
+                    <h3 style={{ marginBottom: 4 }}>Review & Save</h3>
+                    <p className="muted" style={{ margin: 0 }}>Save after reviewing schedule, payroll defaults, and GPS verification behavior.</p>
                   </div>
                 </div>
-                <p className="muted" style={{marginTop: '8px'}}>Map preview updates instantly. Save to apply for GPS verification.</p>
+                <div className="settings-save-summary">
+                  <p><span>Default Hours</span><strong>{settings.workStart} - {settings.workEnd}</strong></p>
+                  <p><span>GPS Verification</span><strong>{settings.gpsVerify ? 'Enabled' : 'Disabled'}</strong></p>
+                  <p><span>Tax Default</span><strong>{settings.payrollRules?.taxEnabled ? 'Enabled' : 'Disabled'}</strong></p>
+                  <p><span>Payslip Delivery</span><strong>{settings.payrollRules?.payslipDeliveryMode || 'portal_pdf'}</strong></p>
+                </div>
+                <button onClick={saveSettings} disabled={savingSettings}>{savingSettings ? 'Saving...' : 'Save Changes'}</button>
               </article>
             </section>
-
-            <section className="card">
-              <button onClick={saveSettings} disabled={savingSettings}>{savingSettings ? 'Saving...' : 'Save Changes'}</button>
-            </section>
-          </>
+          </div>
         )}
 
         {employeeDetail ? (
@@ -4783,11 +5523,26 @@ await createEmployeeByAdmin({
                       <article className="card salary-summary-card">
                         <h3>Profile</h3>
                         <div className="grid two compact">
+                          <p><strong>Employee ID:</strong> {employeeDetail.employeeCode || '-'}</p>
                           <p><strong>Role:</strong> {employeeDetail.role || 'employee'}</p>
                           <p><strong>Payroll Role:</strong> {employeeDetail.roleName || 'None'}</p>
+                          <p><strong>Grade:</strong> {employeeDetail.grade || '-'}</p>
+                          <p><strong>Employment Type:</strong> {employeeDetail.employmentType || '-'}</p>
+                          <p><strong>Status:</strong> {employeeDetail.status || 'active'}</p>
+                          <p><strong>Department:</strong> {employeeDetail.department || '-'}</p>
+                          <p><strong>Attendance Source:</strong> {employeeDetail.attendanceSource || settings.payrollRules?.attendanceIntegrationMode || 'manual'}</p>
+                          <p><strong>Phone:</strong> {employeeDetail.phone || '-'}</p>
+                          <p><strong>Join Date:</strong> {employeeDetail.joinDate ? new Date(employeeDetail.joinDate).toLocaleDateString() : '-'}</p>
                           <p><strong>Daily Rate:</strong> {Number(employeeDetail.dailyRate || 0).toLocaleString()}</p>
                           <p><strong>Paid Holidays:</strong> {Number(employeeDetail.allowedHolidays ?? settings.payrollRules?.defaultAllowedHolidays ?? 1)}</p>
+                          <p><strong>Bank:</strong> {employeeDetail.bankName || '-'}</p>
+                          <p><strong>Account:</strong> {employeeDetail.bankAccountNo || '-'}</p>
+                          <p><strong>{employeeDetail.taxLabel || settings.payrollRules?.taxLabel || 'Tax'} No:</strong> {employeeDetail.taxNumber || '-'}</p>
+                          <p><strong>Loan Installment:</strong> {Number(employeeDetail.loanInstallment || 0).toLocaleString()}</p>
+                          <p><strong>Advance Recovery:</strong> {Number(employeeDetail.advanceInstallment || 0).toLocaleString()}</p>
                           <p><strong>Attendance Days:</strong> {employeeDetailRows.length}</p>
+                          {employeeDetail.address && <p><strong>Address:</strong> {employeeDetail.address}</p>}
+                          {employeeDetail.notes && <p><strong>Notes:</strong> {employeeDetail.notes}</p>}
                         </div>
                       </article>
                       <article className="card salary-summary-card">
@@ -4800,6 +5555,10 @@ await createEmployeeByAdmin({
                           <p><strong>OT Minutes:</strong> {summary.overtimeMinutes}</p>
                           <p><strong>Salary Record:</strong> {detailSalary ? 'Available' : 'Not generated'}</p>
                           <p><strong>Month:</strong> {employeeDetailMonth}</p>
+                          <p><strong>Allowances:</strong> {Number(detailSalary?.allowancesTotal || 0).toLocaleString()}</p>
+                          <p><strong>Incentives:</strong> {Number(detailSalary?.incentivePay || 0).toLocaleString()}</p>
+                          <p><strong>{detailSalary?.taxLabel || settings.payrollRules?.taxLabel || 'Tax'}:</strong> {Number(detailSalary?.taxDeduction || 0).toLocaleString()}</p>
+                          <p><strong>Final Salary:</strong> {Number(detailSalary?.finalSalary || 0).toLocaleString()}</p>
                         </div>
                       </article>
                     </section>

@@ -1,6 +1,6 @@
 // StatusBadge Component for consistent status indicators
 export function StatusBadge({ status, variant = 'default', size = 'medium', className = '' }) {
-  const getStatusConfig = (status, variant) => {
+  const getStatusConfig = (status) => {
     const configs = {
       // Status variants
       present: { label: 'Present', color: 'success', icon: '✓' },

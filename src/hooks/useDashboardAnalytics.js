@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { getTodayKey, formatDateKey } from '../lib/time'
+import { formatDateKey } from '../lib/time'
 
 // Hook to process analytics data for dashboard
 export function useDashboardAnalytics(logs, employees, salaryRows, dashboardRange, date) {
